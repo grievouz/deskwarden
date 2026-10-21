@@ -33,10 +33,11 @@ struct VaultwardenTests {
         let testClient = TestClient(server: server, deviceIdentifier: deviceIdentifier)
         try await testClient.register(email: email, password: password, kdf: kdf)
 
-        let manager = AccountManager(store: store, deviceIdentifier: deviceIdentifier)
+        let manager = AccountManager(store: store, keyProtector: FakeKeyProtector(), deviceIdentifier: deviceIdentifier)
         #expect(try await manager.logIn(server: server, email: email, password: password) == .signedIn)
         #expect(manager.status == .unlocked(email: email, server: server))
         #expect(manager.syncError == nil)
+        #expect(manager.canUnlockWithTouchID)
 
         try await testClient.addItems(email: email, password: password)
         await manager.sync()
@@ -66,13 +67,40 @@ struct VaultwardenTests {
         try await manager.unlock(password: password)
         #expect(try await secrets.value(at: "Infra/Postgres", field: "password") == "pg-secret")
         manager.lock()
+        try await manager.unlockWithTouchID()
+        #expect(try await secrets.value(at: "Infra/Postgres", field: "password") == "pg-secret")
+        manager.lock()
 
-        // A relaunch starts locked and unlocks from the stored account.
-        let relaunched = AccountManager(store: store, deviceIdentifier: deviceIdentifier)
+        // A relaunch starts locked and Touch ID unlocks it from the stored account.
+        let relaunched = AccountManager(store: store, keyProtector: FakeKeyProtector(), deviceIdentifier: deviceIdentifier)
         #expect(relaunched.status == .locked(email: email, server: server))
-        try await relaunched.unlock(password: password)
+        #expect(relaunched.canUnlockWithTouchID)
+        try await relaunched.unlockWithTouchID()
         #expect(try await relaunched.secretProvider.value(at: "Infra/Postgres", field: "password") == "pg-secret")
+        relaunched.lock()
 
+        // A dismissed prompt leaves Touch ID set up.
+        let cancelled = AccountManager(store: store, keyProtector: FakeKeyProtector(failure: .cancelled), deviceIdentifier: deviceIdentifier)
+        await #expect(throws: AccountError.unlock(.cancelled)) {
+            try await cancelled.unlockWithTouchID()
+        }
+        #expect(cancelled.canUnlockWithTouchID)
+
+        // A key that stopped working (fingerprints changed) is dropped; the
+        // master password unlocks and sets Touch ID up again.
+        let invalidated = AccountManager(store: store, keyProtector: FakeKeyProtector(failure: .invalidated), deviceIdentifier: deviceIdentifier)
+        await #expect(throws: AccountError.unlock(.needsMasterPassword)) {
+            try await invalidated.unlockWithTouchID()
+        }
+        #expect(!invalidated.canUnlockWithTouchID)
+        #expect(store.loadSealedUserKey() == nil)
+        try await invalidated.unlock(password: password)
+        #expect(invalidated.canUnlockWithTouchID)
+
+        invalidated.logOut()
+        let relaunchedAfterLogOut = AccountManager(store: store, keyProtector: FakeKeyProtector(), deviceIdentifier: deviceIdentifier)
+        #expect(relaunchedAfterLogOut.status == .signedOut)
+        #expect(store.loadSealedUserKey() == nil)
         relaunched.logOut()
         #expect(relaunched.status == .signedOut)
         #expect(try store.loadAccount() == nil)
@@ -88,7 +116,7 @@ struct VaultwardenTests {
         let store = AccountStore(directory: directory, keychainService: "io.github.grievouz.deskwarden.tests")
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = AccountManager(store: store, deviceIdentifier: deviceIdentifier)
+        let manager = AccountManager(store: store, keyProtector: FakeKeyProtector(), deviceIdentifier: deviceIdentifier)
         await #expect {
             try await manager.logIn(server: server, email: email, password: "wrong password")
         } throws: { error in
@@ -246,5 +274,23 @@ private struct TestClient {
             throw URLError(.badServerResponse)
         }
         return data
+    }
+}
+
+/// Stands in for the Secure Enclave, which needs a finger on the sensor.
+private struct FakeKeyProtector: UserKeyProtector {
+    var failure: TouchIDError?
+
+    var isAvailable: Bool {
+        true
+    }
+
+    func seal(_ userKey: String) throws(TouchIDError) -> Data {
+        Data(userKey.utf8.reversed())
+    }
+
+    func open(_ sealed: Data, reason: String) async throws(TouchIDError) -> String {
+        if let failure { throw failure }
+        return String(decoding: Data(sealed.reversed()), as: UTF8.self)
     }
 }

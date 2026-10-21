@@ -5,11 +5,17 @@ import OSLog
 
 public enum UnlockError: Error, Equatable, Sendable, LocalizedError {
     case wrongPassword
+    /// The Touch ID prompt was dismissed.
+    case cancelled
+    /// Touch ID can't unlock right now; the master password still can, and turns Touch ID back on.
+    case needsMasterPassword
     case failed(String)
 
     public var errorDescription: String? {
         switch self {
         case .wrongPassword: "The master password is wrong."
+        case .cancelled: nil
+        case .needsMasterPassword: "Unlock with your master password to turn Touch ID back on."
         case .failed(let message): "Couldn't unlock the vault: \(message)"
         }
     }
@@ -58,27 +64,17 @@ actor VaultSession {
     }
 
     static func unlock(_ account: StoredAccount, password: String, deviceIdentifier: String) async throws(UnlockError) -> VaultSession {
-        let client = makeClient(server: account.server, deviceIdentifier: deviceIdentifier)
-        let request = InitUserCryptoRequest(
-            userId: account.userId,
-            kdfParams: account.kdf.sdk,
-            email: account.email,
-            accountCryptographicState: account.cryptographicState,
-            method: .masterPasswordUnlock(
-                password: password,
-                masterPasswordUnlock: MasterPasswordUnlockData(
-                    kdf: account.kdf.sdk,
-                    masterKeyWrappedUserKey: account.masterKeyWrappedUserKey,
-                    salt: account.salt,
-                    containedKeyId: nil
-                )
-            ),
-            upgradeToken: account.v2UpgradeToken.map {
-                V2UpgradeToken(wrappedUserKey1: $0.wrappedUserKey1, wrappedUserKey2: $0.wrappedUserKey2)
-            }
+        let method = InitUserCryptoMethod.masterPasswordUnlock(
+            password: password,
+            masterPasswordUnlock: MasterPasswordUnlockData(
+                kdf: account.kdf.sdk,
+                masterKeyWrappedUserKey: account.masterKeyWrappedUserKey,
+                salt: account.salt,
+                containedKeyId: nil
+            )
         )
         do {
-            try await client.crypto().initializeUserCrypto(req: request)
+            return try await unlock(account, method: method, deviceIdentifier: deviceIdentifier)
         } catch BitwardenSdk.BitwardenError.EncryptionSettings(.Crypto) {
             // A wrong master password derives a key that can't decrypt the user key.
             throw .wrongPassword
@@ -86,7 +82,37 @@ actor VaultSession {
             logger.error("Unlock failed: \(String(describing: error), privacy: .public)")
             throw .failed("\(error)")
         }
+    }
+
+    /// Unlocks with the user key itself, as opened by Touch ID.
+    static func unlock(_ account: StoredAccount, userKey: String, deviceIdentifier: String) async throws(UnlockError) -> VaultSession {
+        do {
+            return try await unlock(account, method: .decryptedKey(decryptedUserKey: userKey), deviceIdentifier: deviceIdentifier)
+        } catch {
+            // E.g. the user key was rotated on another device since it was sealed.
+            logger.error("Unlock with the stored user key failed: \(String(describing: error), privacy: .public)")
+            throw .needsMasterPassword
+        }
+    }
+
+    private static func unlock(_ account: StoredAccount, method: InitUserCryptoMethod, deviceIdentifier: String) async throws -> VaultSession {
+        let client = makeClient(server: account.server, deviceIdentifier: deviceIdentifier)
+        try await client.crypto().initializeUserCrypto(req: InitUserCryptoRequest(
+            userId: account.userId,
+            kdfParams: account.kdf.sdk,
+            email: account.email,
+            accountCryptographicState: account.cryptographicState,
+            method: method,
+            upgradeToken: account.v2UpgradeToken.map {
+                V2UpgradeToken(wrappedUserKey1: $0.wrappedUserKey1, wrappedUserKey2: $0.wrappedUserKey2)
+            }
+        ))
         return VaultSession(client: client)
+    }
+
+    /// The decrypted user key, to seal for Touch ID unlock.
+    func userKey() async throws -> String {
+        try await client.crypto().getUserEncryptionKey()
     }
 
     /// Replaces the items with those from a sync response.

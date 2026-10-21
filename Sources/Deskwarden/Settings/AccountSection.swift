@@ -3,6 +3,11 @@ import SwiftUI
 
 struct AccountSection: View {
     @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    private func showUnlockWindow() {
+        openWindow(id: UnlockView.windowID)
+    }
 
     var body: some View {
         switch model.account.status {
@@ -12,10 +17,29 @@ struct AccountSection: View {
             Section {
                 LabeledContent("Signed in as", value: email)
                 LabeledContent("Server", value: server.displayName)
-                UnlockForm(account: model.account)
-                LogOutButton(account: model.account)
+                if model.account.canUnlockWithTouchID {
+                    HStack {
+                        LogOutButton(account: model.account)
+                        Spacer()
+                        Button("Use Master Password…") { showUnlockWindow() }
+                        Button("Unlock with Touch ID") {
+                            Task {
+                                if await model.unlockWithTouchID() { showUnlockWindow() }
+                            }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                } else {
+                    UnlockForm(account: model.account)
+                    LogOutButton(account: model.account)
+                }
             } header: {
                 Text("Account")
+            } footer: {
+                if !model.account.canUnlockWithTouchID {
+                    Text("After unlocking with your master password once, Touch ID unlocks Deskwarden.")
+                        .foregroundStyle(.secondary)
+                }
             }
         case .unlocked(let email, let server):
             Section {

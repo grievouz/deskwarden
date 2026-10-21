@@ -13,9 +13,14 @@ struct MenuContent: View {
         case .signedOut:
             Button("Log In…") { showSettings() }
         case .locked:
-            Button("Unlock…") {
-                NSApp.activate()
-                openWindow(id: UnlockView.windowID)
+            if model.account.canUnlockWithTouchID {
+                Button("Unlock with Touch ID") {
+                    Task {
+                        if await model.unlockWithTouchID() { showUnlockWindow() }
+                    }
+                }
+            } else {
+                Button("Unlock…") { showUnlockWindow() }
             }
         case .unlocked:
             EmptyView()
@@ -48,5 +53,10 @@ struct MenuContent: View {
     private func showSettings() {
         NSApp.activate()
         openSettings()
+    }
+
+    private func showUnlockWindow() {
+        NSApp.activate()
+        openWindow(id: UnlockView.windowID)
     }
 }

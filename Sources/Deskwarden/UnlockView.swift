@@ -16,6 +16,9 @@ struct UnlockView: View {
                 Text("\(email) on \(server.displayName)")
                     .foregroundStyle(.secondary)
                 UnlockForm(account: model.account)
+                Text("After this, Touch ID unlocks Deskwarden.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             } else {
                 Text("Your vault is unlocked.")
                 HStack {

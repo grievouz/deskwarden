@@ -47,12 +47,16 @@ public final class AccountManager {
     public private(set) var lastSyncedAt: Date?
     public private(set) var syncError: String?
     public private(set) var isSyncing = false
+    /// Whether the vault can be unlocked with Touch ID. It becomes true after
+    /// the first unlock with the master password on this Mac.
+    public private(set) var canUnlockWithTouchID = false
 
     public let secretProvider = VaultSecretProvider()
     /// Called after locking or logging out, e.g. to forget Touch ID approvals.
     public var onLock: (() -> Void)?
 
     private let store: AccountStore
+    private let keyProtector: UserKeyProtector
     private let deviceIdentifier: String
     private var account: StoredAccount?
     private var pendingLogin: PendingLogin?
@@ -75,11 +79,12 @@ public final class AccountManager {
     }
 
     public convenience init(deviceIdentifier: String) {
-        self.init(store: AccountStore(), deviceIdentifier: deviceIdentifier)
+        self.init(store: AccountStore(), keyProtector: SecureEnclaveKeyProtector(), deviceIdentifier: deviceIdentifier)
     }
 
-    init(store: AccountStore, deviceIdentifier: String) {
+    init(store: AccountStore, keyProtector: UserKeyProtector, deviceIdentifier: String) {
         self.store = store
+        self.keyProtector = keyProtector
         self.deviceIdentifier = deviceIdentifier
         do {
             account = try store.loadAccount()
@@ -89,6 +94,7 @@ public final class AccountManager {
         }
         if let account {
             status = .locked(email: account.email, server: account.server)
+            canUnlockWithTouchID = store.loadSealedUserKey() != nil
         }
     }
 
@@ -216,6 +222,7 @@ public final class AccountManager {
         self.account = account
         accessToken = AccessToken(value: token.access_token, expiresAt: .now.addingTimeInterval(TimeInterval(token.expires_in)))
         lastRevisionDate = nil
+        await sealUserKey(from: session)
         await activate(session)
         await sync()
     }
@@ -230,12 +237,61 @@ public final class AccountManager {
         } catch {
             throw .unlock(error)
         }
+        await sealUserKey(from: session)
+        await open(session)
+    }
+
+    /// Asks for Touch ID and unlocks with the user key it opens.
+    public func unlockWithTouchID() async throws(AccountError) {
+        guard let account, let sealed = store.loadSealedUserKey() else { throw .unlock(.needsMasterPassword) }
+        let userKey: String
+        do {
+            userKey = try await keyProtector.open(sealed, reason: "unlock your vault")
+        } catch .cancelled {
+            throw .unlock(.cancelled)
+        } catch .invalidated {
+            Self.logger.notice("The Touch ID key no longer works; the master password will set up a new one")
+            forgetSealedUserKey()
+            throw .unlock(.needsMasterPassword)
+        } catch {
+            Self.logger.notice("Touch ID unlock didn't work: \(String(describing: error), privacy: .public)")
+            throw .unlock(.needsMasterPassword)
+        }
+        let session: VaultSession
+        do {
+            session = try await VaultSession.unlock(account, userKey: userKey, deviceIdentifier: deviceIdentifier)
+        } catch {
+            forgetSealedUserKey()
+            throw .unlock(error)
+        }
+        await open(session)
+    }
+
+    private func open(_ session: VaultSession) async {
         // The cached vault makes the items available right away, even offline.
         if let data = store.loadVault(), let cached = try? BitwardenJSON.decoder().decode(SyncResponse.self, from: data) {
             try? await session.load(cached)
         }
         await activate(session)
         await sync()
+    }
+
+    /// Keeps the user key, sealed for Touch ID, so later unlocks don't need the
+    /// master password. Replaces any earlier one, e.g. after fingerprints changed.
+    private func sealUserKey(from session: VaultSession) async {
+        guard keyProtector.isAvailable else { return }
+        do {
+            let sealed = try keyProtector.seal(await session.userKey())
+            try store.saveSealedUserKey(sealed)
+            canUnlockWithTouchID = true
+        } catch {
+            Self.logger.error("Couldn't set up Touch ID unlock: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func forgetSealedUserKey() {
+        store.removeSealedUserKey()
+        canUnlockWithTouchID = false
     }
 
     public func lock() {
@@ -256,6 +312,7 @@ public final class AccountManager {
         accessToken = nil
         lastSyncedAt = nil
         syncError = nil
+        canUnlockWithTouchID = false
         status = .signedOut
         onLock?()
     }

@@ -74,6 +74,8 @@ struct AccountStore: Sendable {
     private var accountFile: URL { directory.appendingPathComponent("account.json") }
     /// The last `/api/sync` response, still encrypted, for unlocking offline.
     private var vaultFile: URL { directory.appendingPathComponent("vault.json") }
+    /// The user key, sealed so only Touch ID on this Mac can open it.
+    private var touchIDFile: URL { directory.appendingPathComponent("touch-id.json") }
 
     func loadAccount() throws -> StoredAccount? {
         guard FileManager.default.fileExists(atPath: accountFile.path) else { return nil }
@@ -92,6 +94,18 @@ struct AccountStore: Sendable {
         try write(data, to: vaultFile)
     }
 
+    func loadSealedUserKey() -> Data? {
+        try? Data(contentsOf: touchIDFile)
+    }
+
+    func saveSealedUserKey(_ data: Data) throws {
+        try write(data, to: touchIDFile)
+    }
+
+    func removeSealedUserKey() {
+        try? FileManager.default.removeItem(at: touchIDFile)
+    }
+
     func loadRefreshToken() throws -> String? {
         try refreshToken.read().map { String(decoding: $0, as: UTF8.self) }
     }
@@ -104,6 +118,7 @@ struct AccountStore: Sendable {
     func clear() throws {
         try? FileManager.default.removeItem(at: accountFile)
         try? FileManager.default.removeItem(at: vaultFile)
+        removeSealedUserKey()
         try refreshToken.delete()
     }
 

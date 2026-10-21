@@ -17,7 +17,7 @@ It isn't a full Bitwarden client and isn't affiliated with Bitwarden, Inc.
 | varlock plugin | Works; tested end to end against the socket |
 | Bitwarden sign-in (2FA by authenticator app or email, new-device code), unlock, lock, log out | Works; tested end to end against Vaultwarden |
 | Automatic sync | Works: checks every minute and after wake, syncs when the vault changed |
-| Touch ID unlock of the vault | Next |
+| Touch ID unlock, prompted when Deskwarden opens | Works; the first master-password unlock sets it up |
 | Auto-lock (on sleep, screen lock, idle) | Planned |
 | SSH agent | Planned |
 
@@ -88,17 +88,20 @@ Log in under **Account** in Settings, on bitwarden.com, bitwarden.eu or a self-h
 - **The master password never leaves the Mac.** The SDK derives the master key (PBKDF2 or Argon2id) and the server only gets a hash of it, as with the official clients.
 - **Identity**: Deskwarden presents itself as a macOS desktop client (`client_id=desktop`, device type 7) with a stable device id, so it appears in your account's devices as "macos".
 
+**Unlocking** happens with Touch ID when Deskwarden opens, and from **Unlock with Touch ID** in the menu. The master password is only needed to log in, and again if Touch ID can't be used (fingerprints changed, Touch ID unavailable, or you choose **Use Master Password** in the prompt); unlocking with it sets Touch ID up again. Behind it, the vault's user key is sealed with a Secure Enclave key that only works after Touch ID with the fingerprints enrolled at the time (ECIES with P-256, HKDF-SHA256 and AES-GCM, via CryptoKit; no keychain entitlement needed), and the SDK unlocks with the key Touch ID opens.
+
 **While unlocked**, the SDK holds the user key in memory. Item names and folders are decrypted to build the path index; values are decrypted only when a client asks for one.
 
 **On disk**, everything is either public or encrypted, like the official clients' local data:
 
 - `~/Library/Application Support/Deskwarden/account.json`: KDF settings and the encrypted user and private keys, so the vault can be unlocked again.
 - `~/Library/Application Support/Deskwarden/vault.json`: the last sync, still encrypted, so unlocking works offline.
+- `~/Library/Application Support/Deskwarden/touch-id.json`: the user key sealed for Touch ID, and the Secure Enclave key in the form only this Mac's enclave can use.
 - The refresh token, in the login keychain.
 
 **Syncing** happens after logging in and unlocking, after the Mac wakes, and on **Sync Now**. Every minute Deskwarden asks the server for the vault's revision date and syncs only if it changed. Each sync also refreshes the stored key material, so a password or KDF change on another device keeps working.
 
-**Lock** drops the keys from memory and forgets Touch ID approvals. **Log Out** also deletes the stored account, the cached vault and the session. If the session is revoked (password changed elsewhere, sessions deauthorized), Deskwarden logs out.
+**Lock** drops the keys from memory and forgets Touch ID approvals. **Log Out** also deletes the stored account, the cached vault, the Touch ID key and the session. If the session is revoked (password changed elsewhere, sessions deauthorized), Deskwarden logs out.
 
 ## Using it with varlock
 
@@ -179,10 +182,8 @@ Planned: verify the requesting process from the kernel (its PID and process tree
 
 ## Roadmap
 
-1. **Unlock with Touch ID.** Wrap the vault's user key with a Secure Enclave key that requires biometry (CryptoKit, no keychain entitlement needed), the way varlock's own daemon stores its keys, and unlock with the SDK's `decryptedKey` method.
-2. **Auto-lock** on sleep, screen lock or after a period of inactivity.
-3. **SSH agent.** Serve the vault's SSH key items on `~/.deskwarden/ssh-agent.sock`, verified like secrets requests. `ssh` and `git` speak the plain agent protocol and can't present a key, so SSH clients are identified by their process instead. [Secretive](https://github.com/maxgoedjen/Secretive) (MIT) has a native Swift agent with a pluggable key store to build on.
-4. App icon and menu bar icons.
+1. **Auto-lock** on sleep, screen lock or after a period of inactivity.
+2. **SSH agent.** Serve the vault's SSH key items on `~/.deskwarden/ssh-agent.sock`, verified like secrets requests. `ssh` and `git` speak the plain agent protocol and can't present a key, so SSH clients are identified by their process instead. [Secretive](https://github.com/maxgoedjen/Secretive) (MIT) has a native Swift agent with a pluggable key store to build on.
 
 The official [iOS app](https://github.com/bitwarden/ios) is the reference for Bitwarden's API: its request fields, error handling and SDK record mapping are what `DeskwardenAccount` follows.
 

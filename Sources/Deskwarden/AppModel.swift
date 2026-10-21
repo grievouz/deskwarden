@@ -138,6 +138,10 @@ final class AppModel {
         loadApplications()
         applySecretsSocket()
 
+        if account.canUnlockWithTouchID {
+            Task { _ = await self.unlockWithTouchID() }
+        }
+
         // The periodic check can be hours late after sleep.
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -150,6 +154,21 @@ final class AppModel {
 
     var isUnlocked: Bool {
         if case .unlocked = account.status { true } else { false }
+    }
+
+    /// Unlocks with Touch ID. Returns true when the master password is needed
+    /// instead: Touch ID isn't available, or the user chose the password.
+    func unlockWithTouchID() async -> Bool {
+        do {
+            try await account.unlockWithTouchID()
+        } catch .unlock(.needsMasterPassword) {
+            return true
+        } catch {
+            if let message = error.errorDescription {
+                Self.logger.error("Touch ID unlock failed: \(message, privacy: .public)")
+            }
+        }
+        return false
     }
 
     var statusTitle: String {

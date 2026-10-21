@@ -139,10 +139,11 @@ final class SecretsConnection: @unchecked Sendable {
 
     private func authenticate(_ auth: ClientMessage.Auth) {
         guard let application = applications[auth.keyId],
+              let secret = application.secret,
               HMAC<SHA256>.isValidAuthenticationCode(
                   auth.proof,
                   authenticating: SecretsProtocol.authContext + nonce,
-                  using: SymmetricKey(data: application.secret)
+                  using: SymmetricKey(data: secret)
               )
         else {
             state = .closed
@@ -162,7 +163,7 @@ final class SecretsConnection: @unchecked Sendable {
             applicationName: application.name,
             connectionId: id,
             client: client,
-            path: get.path
+            action: "read \(get.path)"
         )
         // Unlocking asks for Touch ID, which then also verifies this request.
         var verified = false

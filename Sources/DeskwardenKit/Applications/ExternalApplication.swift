@@ -1,41 +1,49 @@
 import Foundation
 import Security
 
-/// An application allowed to use Deskwarden's sockets, and the key it
-/// connects with.
+/// An application allowed to use Deskwarden: either one with a key for the
+/// secrets socket, or an SSH client recognized by its process.
 ///
-/// The application is configured with a single string, `dwk_<id>_<secret>`.
+/// A key application is configured with a single string, `dwk_<id>_<secret>`.
 /// The id is the TLS PSK identity and the secret is the PSK itself, so the
 /// same string both authenticates the application and keys the encryption.
+/// SSH clients can't present a key, so they're added when first approved and
+/// recognized by `process` after that.
 public struct ExternalApplication: Codable, Identifiable, Hashable, Sendable {
     public static let keyPrefix = "dwk_"
     static let secretLength = 32
 
     public let id: String
     public var name: String
-    public let secret: Data
+    public let secret: Data?
+    public let process: ProcessIdentity?
     public let createdAt: Date
     public var lastUsedAt: Date?
 
-    public init(id: String, name: String, secret: Data, createdAt: Date = .now, lastUsedAt: Date? = nil) {
+    public init(id: String, name: String, secret: Data?, process: ProcessIdentity? = nil, createdAt: Date = .now, lastUsedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.secret = secret
+        self.process = process
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }
 
     public static func generate(name: String) -> ExternalApplication {
-        ExternalApplication(
-            id: randomBytes(8).map { String(format: "%02x", $0) }.joined(),
-            name: name,
-            secret: randomBytes(secretLength)
-        )
+        ExternalApplication(id: newID(), name: name, secret: randomBytes(secretLength))
     }
 
-    /// The string the application is configured with.
-    public var key: String {
-        "\(Self.keyPrefix)\(id)_\(secret.base64URLEncodedString())"
+    public static func sshClient(_ client: SSHClient) -> ExternalApplication {
+        ExternalApplication(id: newID(), name: client.appName, secret: nil, process: client.identity)
+    }
+
+    private static func newID() -> String {
+        randomBytes(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The string a key application is configured with.
+    public var key: String? {
+        secret.map { "\(Self.keyPrefix)\(id)_\($0.base64URLEncodedString())" }
     }
 
     public static func parse(key: String) -> (id: String, secret: Data)? {

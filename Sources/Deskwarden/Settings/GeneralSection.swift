@@ -7,9 +7,8 @@ struct GeneralSection: View {
         Section("General") {
             Toggle(isOn: $model.sshAgentEnabled) {
                 Text("SSH agent")
-                Text("Serves the SSH keys in your vault to ssh and git. Not built yet.")
+                Text("Serves the SSH keys in your vault to ssh and git. Set IdentityAgent ~/.deskwarden/ssh-agent.sock in ~/.ssh/config.")
             }
-            .disabled(true)
 
             Toggle(isOn: $model.secretsSocketEnabled) {
                 Text("Secrets socket")

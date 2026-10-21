@@ -97,8 +97,8 @@ public final class AccountManager {
             status = .locked(email: account.email, server: account.server)
             canUnlockWithTouchID = store.loadSealedUserKey() != nil
         }
-        secretProvider.setUnlockHandler { [weak self] request in
-            await self?.unlock(for: request) ?? false
+        secretProvider.setUnlockHandler { [weak self] reason in
+            await self?.unlock(reason: reason) ?? false
         }
     }
 
@@ -271,9 +271,9 @@ public final class AccountManager {
         await open(session)
     }
 
-    /// Unlocks with Touch ID for a request that arrived while locked. Requests
-    /// arriving together share one prompt.
-    func unlock(for request: ApprovalRequest) async -> Bool {
+    /// Unlocks with Touch ID for a request that arrived while locked, such as
+    /// a secret or an SSH signature. Requests arriving together share one prompt.
+    func unlock(reason: String) async -> Bool {
         if case .unlocked = status { return true }
         guard case .locked = status, canUnlockWithTouchID else { return false }
         if let pendingUnlock {
@@ -281,7 +281,7 @@ public final class AccountManager {
         }
         let task = Task { () -> Bool in
             do {
-                try await unlockWithTouchID(reason: "unlock your vault so \(request.requester) can read \(request.path)")
+                try await unlockWithTouchID(reason: reason)
                 return true
             } catch {
                 return false
@@ -444,18 +444,18 @@ public final class AccountManager {
     }
 }
 
-/// Lets the secrets socket read whichever vault is unlocked right now, and
-/// unlock it with Touch ID when a request arrives while it's locked.
-public final class VaultSecretProvider: SecretProvider {
+/// Lets the secrets socket and the SSH agent use whichever vault is unlocked
+/// right now, and unlock it with Touch ID when a request arrives while it's locked.
+public final class VaultSecretProvider: SecretProvider, SSHKeyProvider {
     private let current = Mutex<VaultSession?>(nil)
-    private let unlockHandler = Mutex<(@Sendable (ApprovalRequest) async -> Bool)?>(nil)
+    private let unlockHandler = Mutex<(@Sendable (String) async -> Bool)?>(nil)
 
     var session: VaultSession? {
         get { current.withLock { $0 } }
         set { current.withLock { $0 = newValue } }
     }
 
-    func setUnlockHandler(_ handler: @escaping @Sendable (ApprovalRequest) async -> Bool) {
+    func setUnlockHandler(_ handler: @escaping @Sendable (String) async -> Bool) {
         unlockHandler.withLock { $0 = handler }
     }
 
@@ -464,8 +464,20 @@ public final class VaultSecretProvider: SecretProvider {
     }
 
     public func unlock(for request: ApprovalRequest) async -> Bool {
+        await unlock(reason: "unlock your vault so \(request.requester) can \(request.action)")
+    }
+
+    public func unlock(reason: String) async -> Bool {
         guard let handler = unlockHandler.withLock({ $0 }) else { return false }
-        return await handler(request)
+        return await handler(reason)
+    }
+
+    public func sshKeys() async -> [SSHKeyEntry] {
+        await session?.sshKeys ?? []
+    }
+
+    public func sshPrivateKey(id: String) async -> String? {
+        await session?.sshPrivateKey(id: id)
     }
 
     public func value(at path: String, field: String) async throws(SecretLookupError) -> String {

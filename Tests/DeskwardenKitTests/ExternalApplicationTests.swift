@@ -5,10 +5,11 @@ import Testing
 struct ExternalApplicationTests {
     @Test func keyRoundTrips() throws {
         let application = ExternalApplication.generate(name: "varlock")
-        let parsed = try #require(ExternalApplication.parse(key: application.key))
+        let key = try #require(application.key)
+        let parsed = try #require(ExternalApplication.parse(key: key))
         #expect(parsed.id == application.id)
         #expect(parsed.secret == application.secret)
-        #expect(application.key.hasPrefix("dwk_"))
+        #expect(application.key?.hasPrefix("dwk_") == true)
     }
 
     @Test func generatedApplicationsDiffer() {

@@ -43,7 +43,7 @@ let server = SecretsServer(
 server.onStatusChange = { status in
     switch status {
     case .listening:
-        print("READY \(application.key)")
+        print("READY \(application.key!)")
         fflush(stdout)
     case .failed(let message):
         FileHandle.standardError.write(Data("failed: \(message)\n".utf8))

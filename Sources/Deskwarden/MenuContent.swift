@@ -29,7 +29,6 @@ struct MenuContent: View {
         Divider()
 
         Toggle("SSH Agent", isOn: $model.sshAgentEnabled)
-            .disabled(true)
         Toggle("Secrets Socket", isOn: $model.secretsSocketEnabled)
 
         Divider()

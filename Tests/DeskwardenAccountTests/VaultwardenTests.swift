@@ -59,6 +59,19 @@ struct VaultwardenTests {
         #expect(manager.syncError == nil)
         #expect(try await secrets.value(at: "Stripe", field: "password") == "sk_test_new")
 
+        // SSH key items, generated the way Bitwarden does, reach the agent.
+        let sshKeys = try await testClient.addSSHKeys(email: email, password: password)
+        await manager.sync()
+        let served = await secrets.sshKeys()
+        #expect(Set(served.map(\.name)) == Set(sshKeys.keys))
+        for entry in served {
+            let pem = try #require(await secrets.sshPrivateKey(id: entry.id))
+            let privateKey = try OpenSSHPrivateKey(pem: pem)
+            #expect(privateKey.publicKeyBlob == entry.publicKeyBlob)
+            #expect(VaultSession.publicKeyBlob(try #require(sshKeys[entry.name])) == entry.publicKeyBlob)
+            #expect(try !privateKey.sign(Data("challenge".utf8), flags: OpenSSHPrivateKey.rsaSHA256Flag).isEmpty)
+        }
+
         manager.lock()
         #expect(secrets.isLocked)
         await #expect(throws: AccountError.unlock(.wrongPassword)) {
@@ -82,7 +95,7 @@ struct VaultwardenTests {
         // Requests arriving while locked unlock it, sharing one prompt.
         let counter = OpenCounter()
         let onDemand = AccountManager(store: store, keyProtector: FakeKeyProtector(counter: counter), deviceIdentifier: deviceIdentifier)
-        let request = ApprovalRequest(applicationId: "app", applicationName: "varlock", connectionId: UUID(), client: nil, path: "Infra/Postgres")
+        let request = ApprovalRequest(applicationId: "app", applicationName: "varlock", connectionId: UUID(), client: nil, action: "read Infra/Postgres")
         async let first = onDemand.secretProvider.unlock(for: request)
         async let second = onDemand.secretProvider.unlock(for: request)
         #expect(await [first, second] == [true, true])
@@ -181,6 +194,26 @@ private struct TestClient {
         try await addNote(client: client, token: token, name: "Deploy notes", notes: "line one\nline two")
     }
 
+    /// Adds an Ed25519 and an RSA key item; returns their public keys by item name.
+    func addSSHKeys(email: String, password: String) async throws -> [String: String] {
+        let (client, token) = try await logIn(email: email, password: password)
+        var publicKeys: [String: String] = [:]
+        for (name, algorithm) in [("GitHub", KeyAlgorithm.ed25519), ("Legacy server", KeyAlgorithm.rsa3072)] {
+            let key = try client.ssh().generateSshKey(keyAlgorithm: algorithm)
+            let context = try await client.vault().ciphers().encrypt(cipherView: cipherView(type: .sshKey, name: name, sshKey: key))
+            let cipher = context.cipher
+            try await postCipher(cipher, encryptedFor: context.encryptedFor, token: token, extra: [
+                "sshKey": [
+                    "privateKey": cipher.sshKey?.privateKey as Any,
+                    "publicKey": cipher.sshKey?.publicKey as Any,
+                    "keyFingerprint": cipher.sshKey?.fingerprint as Any,
+                ],
+            ])
+            publicKeys[name] = key.publicKey
+        }
+        return publicKeys
+    }
+
     func addLogin(email: String, password: String, name: String, secret: String) async throws {
         let (client, token) = try await logIn(email: email, password: password)
         try await addLogin(client: client, token: token, folderId: nil, name: name, username: "", password: secret, fields: [])
@@ -253,11 +286,12 @@ private struct TestClient {
         notes: String? = nil,
         login: LoginView? = nil,
         secureNote: SecureNoteView? = nil,
+        sshKey: SshKeyView? = nil,
         fields: [FieldView]? = nil
     ) -> CipherView {
         CipherView(
             id: nil, organizationId: nil, folderId: folderId, collectionIds: [], key: nil, name: name, notes: notes,
-            type: type, login: login, identity: nil, card: nil, secureNote: secureNote, sshKey: nil, bankAccount: nil,
+            type: type, login: login, identity: nil, card: nil, secureNote: secureNote, sshKey: sshKey, bankAccount: nil,
             driversLicense: nil, passport: nil, favorite: false, reprompt: .none, organizationUseTotp: false, edit: true,
             permissions: nil, viewPassword: true, localData: nil, attachments: nil, attachmentDecryptionFailures: nil,
             fields: fields, passwordHistory: nil, creationDate: .now, deletedDate: nil, revisionDate: .now,

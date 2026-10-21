@@ -24,7 +24,7 @@ struct ApprovalTests {
     }
 
     func request(app: String = "app", connection: UUID = UUID()) -> ApprovalRequest {
-        ApprovalRequest(applicationId: app, applicationName: app, connectionId: connection, client: nil, path: "Item")
+        ApprovalRequest(applicationId: app, applicationName: app, connectionId: connection, client: nil, action: "read Item")
     }
 
     @Test func everyRequestPromptsEachTime() async {
@@ -131,7 +131,7 @@ struct ApprovalTests {
             applicationName: "varlock",
             connectionId: UUID(),
             client: ClientInfo(name: "something else", pid: 42, cwd: "/Users/me/code/shop"),
-            path: "Infra/Stripe"
+            action: "read Infra/Stripe"
         )
         #expect(TouchIDApprover.reason(for: request) == "let varlock in shop read Infra/Stripe")
     }

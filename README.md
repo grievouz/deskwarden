@@ -2,7 +2,7 @@
 
 A small native macOS menu bar app for a Bitwarden vault. It does two things:
 
-- **SSH agent**: serves the SSH keys in your vault to `ssh` and `git` (not built yet).
+- **SSH agent**: serves the SSH keys in your vault to `ssh` and `git`.
 - **Secrets socket**: lets external applications read vault items by path, e.g. `Infra/Postgres`, after Touch ID. A [varlock](https://varlock.dev) plugin is included.
 
 It isn't a full Bitwarden client and isn't affiliated with Bitwarden, Inc.
@@ -19,14 +19,14 @@ It isn't a full Bitwarden client and isn't affiliated with Bitwarden, Inc.
 | Automatic sync | Works: checks every minute and after wake, syncs when the vault changed |
 | Touch ID unlock, prompted when Deskwarden opens | Works; the first master-password unlock sets it up |
 | Auto-lock on sleep (default on) or screen lock (default off) | Works |
-| SSH agent | Planned |
+| SSH agent (Ed25519, ECDSA, RSA; clients identified by process) | Works; tested with OpenSSH's own tools |
 
 ## Layout
 
 ```
 Sources/Deskwarden/         SwiftUI app: MenuBarExtra, Settings, unlock window, AppModel
 Sources/DeskwardenAccount/  Bitwarden API client, login, sync, the unlocked vault; the only code using the SDK
-Sources/DeskwardenKit/      External applications, secrets socket server, Touch ID approval, vault lookup
+Sources/DeskwardenKit/      External applications, secrets socket, SSH agent, Touch ID approval, vault lookup
 Sources/SocketHarness/      Runs the socket against fixture items, for client e2e tests
 Tests/                      Swift unit tests, plus Vaultwarden integration tests
 plugins/varlock/            The varlock plugin (TypeScript, bundled to one CJS file)
@@ -102,6 +102,28 @@ Log in under **Account** in Settings, on bitwarden.com, bitwarden.eu or a self-h
 **Syncing** happens after logging in and unlocking, after the Mac wakes, and on **Sync Now**. Every minute Deskwarden asks the server for the vault's revision date and syncs only if it changed. Each sync also refreshes the stored key material, so a password or KDF change on another device keeps working.
 
 **Lock** drops the keys from memory and forgets Touch ID approvals. **Log Out** also deletes the stored account, the cached vault, the Touch ID key and the session. If the session is revoked (password changed elsewhere, sessions deauthorized), Deskwarden logs out.
+
+## SSH agent
+
+Add this to `~/.ssh/config` (or set `SSH_AUTH_SOCK` to the same path):
+
+```
+Host *
+  IdentityAgent ~/.deskwarden/ssh-agent.sock
+```
+
+The agent serves the vault's SSH key items: Ed25519, ECDSA (P-256, P-384, P-521) and RSA, with SHA-2 signatures for RSA when the client asks for them, which current OpenSSH always does. `ssh-add -L` lists them, named after their vault items.
+
+- **Listing keys** never asks, unless the vault is locked: then one Touch ID prompt unlocks it.
+- **Signing** follows **Verify requests**, like the secrets socket.
+- **First use**: an app's first signature always asks ("let Alacritty use your SSH key “GitHub” (git → ssh)") and adds the app to **External Applications** as an SSH client. Removing it there means it's asked about again next time.
+- **Refusing** ends that connection's requests, so a client can't keep prompting by offering one key after another.
+
+**Who's asking.** SSH clients can't present a key, so they're identified by their process. The agent asks the kernel which process connected and checks it belongs to you. The connecting process is almost always `ssh`, so the agent walks up its parents to the app it was started from: the outermost `.app` bundle, such as your terminal or editor, or the topmost process below launchd when there's none (a tmux server, for example). An app signed by a developer is recognized by team and bundle identifier; anything else by its path and code hash, so an unsigned app is asked about again after it changes.
+
+Anything running inside an approved app counts as that app, as with every SSH agent; the Touch ID prompts are what stop it from signing silently. The agent never hands out private keys: each one is decrypted only to make the signature at hand.
+
+Adding keys to the agent, agent locking and extensions such as `session-bind@openssh.com` aren't supported; clients carry on without them.
 
 ## Using it with varlock
 
@@ -180,12 +202,13 @@ What it doesn't:
 - malware running as you can read wherever you keep the key and connect. Touch ID is the gate there, except that a stolen key can ride an approval that's still valid (within the interval), and with **Never** there's no gate at all.
 - root.
 
-Planned: verify the requesting process from the kernel (its PID and process tree), so approvals can be scoped to one terminal session and the prompt can name the real executable. Network.framework doesn't expose a connection's socket, so this needs either matching sockets through `proc_pidfdinfo` or moving to a raw socket server.
+Planned for the secrets socket: verify the requesting process from the kernel, as the SSH agent does, so approvals can be scoped to one terminal session and the prompt can name the real executable. Network.framework doesn't expose a connection's socket, so this needs either matching sockets through `proc_pidfdinfo` or moving to a raw socket server.
 
 ## Roadmap
 
 1. **Lock after a period of inactivity.**
-2. **SSH agent.** Serve the vault's SSH key items on `~/.deskwarden/ssh-agent.sock`, verified like secrets requests. `ssh` and `git` speak the plain agent protocol and can't present a key, so SSH clients are identified by their process instead. [Secretive](https://github.com/maxgoedjen/Secretive) (MIT) has a native Swift agent with a pluggable key store to build on.
+2. **Per-app verification settings**, e.g. every SSH signature but only the first secret of each varlock run.
+3. **Kernel-verified clients on the secrets socket too**, like the SSH agent, so approvals can be scoped to one terminal session.
 
 The official [iOS app](https://github.com/bitwarden/ios) is the reference for Bitwarden's API: its request fields, error handling and SDK record mapping are what `DeskwardenAccount` follows.
 

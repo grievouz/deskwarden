@@ -59,7 +59,10 @@ final class AppModel {
     private(set) var launchAtLoginError: String?
 
     var sshAgentEnabled: Bool {
-        didSet { defaults.set(sshAgentEnabled, forKey: DefaultsKey.sshAgentEnabled) }
+        didSet {
+            defaults.set(sshAgentEnabled, forKey: DefaultsKey.sshAgentEnabled)
+            applySSHAgent()
+        }
     }
 
     var secretsSocketEnabled: Bool {
@@ -102,6 +105,7 @@ final class AppModel {
     }
 
     private let secretsServer: SecretsServer
+    private var sshAgent: SSHAgentServer?
     private let approver: TouchIDApprover
     private let applicationStore: ApplicationStore = KeychainApplicationStore()
     private let defaults = UserDefaults.standard
@@ -110,6 +114,7 @@ final class AppModel {
     init() {
         defaults.register(defaults: [
             DefaultsKey.secretsSocketEnabled: true,
+            DefaultsKey.sshAgentEnabled: true,
             DefaultsKey.requestVerification: RequestVerification.firstRequest.rawValue,
             DefaultsKey.lockOnSleep: true,
             DefaultsKey.lockOnScreenLock: false,
@@ -151,6 +156,18 @@ final class AppModel {
 
         loadApplications()
         applySecretsSocket()
+
+        let sshAgent = SSHAgentServer(
+            socketPath: SSHAgentServer.defaultSocketPath,
+            handler: SSHAccess(keys: account.secretProvider, applications: self, approvals: approver)
+        )
+        sshAgent.onStatusChange = { status in
+            if case .failed(let message) = status {
+                Self.logger.error("SSH agent failed: \(message, privacy: .public)")
+            }
+        }
+        self.sshAgent = sshAgent
+        applySSHAgent()
 
         if account.canUnlockWithTouchID {
             Task { _ = await self.unlockWithTouchID() }
@@ -254,5 +271,31 @@ final class AppModel {
         } else {
             secretsServer.stop()
         }
+    }
+
+    private func applySSHAgent() {
+        if sshAgentEnabled {
+            sshAgent?.start()
+        } else {
+            sshAgent?.stop()
+        }
+    }
+}
+
+/// SSH clients become external applications when they're first approved.
+extension AppModel: SSHApplicationRegistry {
+    func application(for client: SSHClient) async -> ExternalApplication? {
+        applications.first { $0.process?.matches(client.identity) == true }
+    }
+
+    func addApplication(for client: SSHClient) async -> ExternalApplication? {
+        let application = ExternalApplication.sshClient(client)
+        applications.append(application)
+        persistApplications()
+        return application
+    }
+
+    func markUsed(_ application: ExternalApplication) async {
+        markUsed(application.id)
     }
 }

@@ -7,6 +7,11 @@ struct ApplicationsSection: View {
     @State private var isAdding = false
     @State private var applicationToRemove: ExternalApplication?
 
+    private static func subtitle(for application: ExternalApplication) -> String {
+        let used = application.lastUsedAt.map { "Last used \($0.formatted(.relative(presentation: .named)))" } ?? "Never used"
+        return application.process != nil ? "SSH client · \(used)" : used
+    }
+
     var body: some View {
         Section {
             if model.applications.isEmpty {
@@ -18,11 +23,7 @@ struct ApplicationsSection: View {
                     Button("Remove…") { applicationToRemove = application }
                 } label: {
                     Text(application.name)
-                    if let lastUsedAt = application.lastUsedAt {
-                        Text("Last used \(lastUsedAt, format: .relative(presentation: .named))")
-                    } else {
-                        Text("Never used")
-                    }
+                    Text(Self.subtitle(for: application))
                 }
             }
             HStack {
@@ -47,7 +48,7 @@ struct ApplicationsSection: View {
             Text("External Applications")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Each application connects to the secrets socket with its own key.")
+                Text("Applications you add get a key for the secrets socket. SSH clients are added when you first let them use a key.")
                     .foregroundStyle(.secondary)
                 if let error = model.keychainError {
                     Text(error).foregroundStyle(.red)
@@ -71,7 +72,7 @@ private struct AddApplicationSheet: View {
                 Text("This is the only time the key is shown.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Text(application.key)
+                    Text(application.key ?? "")
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         .lineLimit(1)
@@ -79,7 +80,7 @@ private struct AddApplicationSheet: View {
                     Spacer()
                     Button("Copy") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(application.key, forType: .string)
+                        NSPasteboard.general.setString(application.key ?? "", forType: .string)
                     }
                 }
                 .padding(8)

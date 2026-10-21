@@ -7,14 +7,16 @@ public struct ApprovalRequest: Sendable {
     /// Identifies one connection, for policies that approve a connection at a time.
     public let connectionId: UUID
     public let client: ClientInfo?
-    public let path: String
+    /// What the requester wants to do, completing "let varlock …": e.g.
+    /// `read Infra/Stripe` or `use your SSH key “GitHub” (git → ssh)`.
+    public let action: String
 
-    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, path: String) {
+    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, action: String) {
         self.applicationId = applicationId
         self.applicationName = applicationName
         self.connectionId = connectionId
         self.client = client
-        self.path = path
+        self.action = action
     }
 
     /// Who's asking, for prompts: the application as the user registered it,
@@ -141,6 +143,6 @@ public actor TouchIDApprover: ApprovalProvider {
 
     /// Completes the system prompt's "Deskwarden is trying to …".
     static func reason(for request: ApprovalRequest) -> String {
-        "let \(request.requester) read \(request.path)"
+        "let \(request.requester) \(request.action)"
     }
 }

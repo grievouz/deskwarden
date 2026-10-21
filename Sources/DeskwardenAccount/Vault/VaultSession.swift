@@ -32,6 +32,8 @@ actor VaultSession {
     private let client: Client
     private var index = VaultIndex(entries: [])
     private var ciphers: [String: BitwardenSdk.Cipher] = [:]
+    /// SSH key items with their public keys, which aren't secret, decrypted.
+    private(set) var sshKeys: [SSHKeyEntry] = []
 
     private init(client: Client) {
         self.client = client
@@ -140,6 +142,30 @@ actor VaultSession {
             return VaultEntry(id: id, name: item.name, folder: item.folderId.flatMap { folderNames[$0] })
         })
         ciphers = Dictionary(encrypted.compactMap { cipher in cipher.id.map { ($0, cipher) } }, uniquingKeysWith: { first, _ in first })
+
+        var sshKeys: [SSHKeyEntry] = []
+        for cipher in encrypted where cipher.type == .sshKey && cipher.deletedDate == nil {
+            guard let id = cipher.id,
+                  let view = try? await client.vault().ciphers().decrypt(cipher: cipher),
+                  let publicKey = view.sshKey?.publicKey,
+                  let blob = Self.publicKeyBlob(publicKey)
+            else { continue }
+            sshKeys.append(SSHKeyEntry(id: id, name: view.name, publicKeyBlob: blob))
+        }
+        self.sshKeys = sshKeys
+    }
+
+    /// The private key of an SSH key item, in OpenSSH format.
+    func sshPrivateKey(id: String) async -> String? {
+        guard let cipher = ciphers[id] else { return nil }
+        return try? await client.vault().ciphers().decrypt(cipher: cipher).sshKey?.privateKey
+    }
+
+    /// The wire-format key from a public key line such as `ssh-ed25519 AAAA… comment`.
+    static func publicKeyBlob(_ line: String) -> Data? {
+        let fields = line.split(separator: " ")
+        guard fields.count >= 2 else { return nil }
+        return Data(base64Encoded: String(fields[1]))
     }
 
     var itemCount: Int {

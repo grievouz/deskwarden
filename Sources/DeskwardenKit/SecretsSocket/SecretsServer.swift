@@ -65,6 +65,8 @@ public final class SecretsServer: @unchecked Sendable {
 
     private func restart(applications: [ExternalApplication]) {
         tearDown()
+        // SSH clients have no key, so they can't use this socket.
+        let applications = applications.filter { $0.secret != nil }
         self.applications = Dictionary(uniqueKeysWithValues: applications.map { ($0.id, $0) })
         // Unauthenticated connections hold the old set, so they go too.
         for connection in connections.values where connection.applicationId.map({ self.applications[$0] == nil }) ?? true {
@@ -135,7 +137,8 @@ public final class SecretsServer: @unchecked Sendable {
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         for application in applications {
-            sec_protocol_options_add_pre_shared_key(options, application.secret.dispatchData, Data(application.id.utf8).dispatchData)
+            guard let secret = application.secret else { continue }
+            sec_protocol_options_add_pre_shared_key(options, secret.dispatchData, Data(application.id.utf8).dispatchData)
         }
         sec_protocol_options_append_tls_ciphersuite(
             options,

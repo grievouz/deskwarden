@@ -7,7 +7,10 @@ struct GeneralSection: View {
         Section("General") {
             Toggle(isOn: $model.sshAgentEnabled) {
                 Text("SSH agent")
-                Text("Serves the SSH keys in your vault to ssh and git. Set IdentityAgent ~/.deskwarden/ssh-agent.sock in ~/.ssh/config.")
+                Text("Serves the SSH keys in your vault to ssh and git. Turning it on adds IdentityAgent to ~/.ssh/config, and turning it off removes it.")
+            }
+            if let error = model.sshConfigError {
+                Text(error).foregroundStyle(.red)
             }
 
             Toggle(isOn: $model.secretsSocketEnabled) {

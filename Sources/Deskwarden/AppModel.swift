@@ -58,10 +58,15 @@ final class AppModel {
     private(set) var keychainError: String?
     private(set) var launchAtLoginError: String?
 
+    private(set) var sshConfigError: String?
+
+    /// Turning the agent on or off also adds or removes its IdentityAgent
+    /// block in ~/.ssh/config.
     var sshAgentEnabled: Bool {
         didSet {
             defaults.set(sshAgentEnabled, forKey: DefaultsKey.sshAgentEnabled)
             applySSHAgent()
+            updateSSHConfig()
         }
     }
 
@@ -114,7 +119,7 @@ final class AppModel {
     init() {
         defaults.register(defaults: [
             DefaultsKey.secretsSocketEnabled: true,
-            DefaultsKey.sshAgentEnabled: true,
+            DefaultsKey.sshAgentEnabled: false,
             DefaultsKey.requestVerification: RequestVerification.firstRequest.rawValue,
             DefaultsKey.lockOnSleep: true,
             DefaultsKey.lockOnScreenLock: false,
@@ -278,6 +283,22 @@ final class AppModel {
             sshAgent?.start()
         } else {
             sshAgent?.stop()
+        }
+    }
+
+    private func updateSSHConfig() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let socketPath = SSHAgentServer.defaultSocketPath.replacingOccurrences(of: home, with: "~")
+        do {
+            if sshAgentEnabled {
+                try SSHConfigFile().install(socketPath: socketPath)
+            } else {
+                try SSHConfigFile().uninstall()
+            }
+            sshConfigError = nil
+        } catch {
+            sshConfigError = "Couldn't update ~/.ssh/config: \(error.localizedDescription)"
+            Self.logger.error("Couldn't update ~/.ssh/config: \(error, privacy: .public)")
         }
     }
 }

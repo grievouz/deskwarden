@@ -105,12 +105,16 @@ Log in under **Account** in Settings, on bitwarden.com, bitwarden.eu or a self-h
 
 ## SSH agent
 
-Add this to `~/.ssh/config` (or set `SSH_AUTH_SOCK` to the same path):
+Turn on **SSH agent** in Settings; it's off by default. Turning it on adds this block to the end of `~/.ssh/config` (creating the file if needed), and turning it off removes it again:
 
 ```
+# Added by Deskwarden. Turning off its SSH agent removes this.
 Host *
   IdentityAgent ~/.deskwarden/ssh-agent.sock
+# End of Deskwarden
 ```
+
+`IdentityAgent` reaches every `ssh` run, including from apps opened in the Dock, which don't see a shell's `SSH_AUTH_SOCK`, and it takes precedence over `SSH_AUTH_SOCK` for `ssh`. Being at the end, an `IdentityAgent` you set for specific hosts earlier in the file still wins. A symlinked `~/.ssh/config` is written through, not replaced. Tools that talk to the agent directly, like `ssh-add`, only read `SSH_AUTH_SOCK`; point it at `~/.deskwarden/ssh-agent.sock` for them, e.g. `SSH_AUTH_SOCK=~/.deskwarden/ssh-agent.sock ssh-add -L`.
 
 The agent serves the vault's SSH key items: Ed25519, ECDSA (P-256, P-384, P-521) and RSA, with SHA-2 signatures for RSA when the client asks for them, which current OpenSSH always does. `ssh-add -L` lists them, named after their vault items.
 

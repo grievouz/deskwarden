@@ -4,9 +4,22 @@ import SwiftUI
 struct MenuContent: View {
     @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Text(model.statusTitle)
+
+        switch model.account.status {
+        case .signedOut:
+            Button("Log In…") { showSettings() }
+        case .locked:
+            Button("Unlock…") {
+                NSApp.activate()
+                openWindow(id: UnlockView.windowID)
+            }
+        case .unlocked:
+            EmptyView()
+        }
 
         Divider()
 
@@ -16,19 +29,24 @@ struct MenuContent: View {
 
         Divider()
 
-        Button("Lock Now") { model.lock() }
-            .disabled(model.vaultState != .unlocked)
-        Button("Sync Now") {}
-            .disabled(model.vaultState != .unlocked)
+        Button("Lock Now") { model.account.lock() }
+            .keyboardShortcut("l")
+            .disabled(!model.isUnlocked)
+        Button("Sync Now") {
+            Task { await model.account.sync() }
+        }
+        .disabled(!model.isUnlocked || model.account.isSyncing)
 
         Divider()
 
-        Button("Settings…") {
-            NSApp.activate()
-            openSettings()
-        }
-        .keyboardShortcut(",")
+        Button("Settings…") { showSettings() }
+            .keyboardShortcut(",")
         Button("Quit Deskwarden") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    private func showSettings() {
+        NSApp.activate()
+        openSettings()
     }
 }

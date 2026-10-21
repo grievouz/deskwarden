@@ -1,5 +1,20 @@
 import Foundation
 
+/// What the index needs to resolve a path: an item's id, name and folder name.
+/// No secrets, so an unlocked vault can keep the index in memory and decrypt
+/// values only when they're asked for.
+public struct VaultEntry: Sendable, Hashable {
+    public let id: String
+    public let name: String
+    public let folder: String?
+
+    public init(id: String, name: String, folder: String?) {
+        self.id = id
+        self.name = name
+        self.folder = folder
+    }
+}
+
 /// A decrypted vault item, reduced to what the secrets socket can hand out.
 public struct VaultItem: Sendable, Hashable {
     public let id: String
@@ -27,6 +42,23 @@ public struct VaultItem: Sendable, Hashable {
         self.notes = notes
         self.fields = fields
     }
+
+    public var entry: VaultEntry {
+        VaultEntry(id: id, name: name, folder: folder)
+    }
+
+    /// `password`, `username` and `notes` read the built-in fields; anything
+    /// else is a custom field, matched case-insensitively.
+    public func value(of field: String) throws(SecretLookupError) -> String {
+        let value: String? = switch field.lowercased() {
+        case "password": password
+        case "username": username
+        case "notes": notes
+        default: fields.first { $0.key.caseInsensitiveCompare(field) == .orderedSame }?.value
+        }
+        guard let value else { throw .fieldNotFound(field) }
+        return value
+    }
 }
 
 public enum SecretLookupError: Error, Equatable, Sendable {
@@ -36,7 +68,7 @@ public enum SecretLookupError: Error, Equatable, Sendable {
     case fieldNotFound(String)
 }
 
-/// Resolves `Folder/Item` paths and field names against a set of vault items.
+/// Resolves `Folder/Item` paths against a set of vault entries.
 ///
 /// A path is split at its last `/`: everything before it is the folder name
 /// (Bitwarden spells nested folders as `Parent/Child`), the rest is the item
@@ -44,42 +76,28 @@ public enum SecretLookupError: Error, Equatable, Sendable {
 /// item id always matches exactly. Names compare case-sensitively; more than
 /// one match is an error rather than a guess.
 public struct VaultIndex: Sendable {
-    let items: [VaultItem]
+    let entries: [VaultEntry]
 
-    public init(items: [VaultItem]) {
-        self.items = items
+    public init(entries: [VaultEntry]) {
+        self.entries = entries
     }
 
-    public func item(at path: String) throws(SecretLookupError) -> VaultItem {
-        if let byId = items.first(where: { $0.id.caseInsensitiveCompare(path) == .orderedSame }) {
+    public func entry(at path: String) throws(SecretLookupError) -> VaultEntry {
+        if let byId = entries.first(where: { $0.id.caseInsensitiveCompare(path) == .orderedSame }) {
             return byId
         }
-        let matches: [VaultItem]
+        let matches: [VaultEntry]
         if let slash = path.lastIndex(of: "/") {
             let folder = String(path[..<slash])
             let name = String(path[path.index(after: slash)...])
-            matches = items.filter { $0.folder == folder && $0.name == name }
+            matches = entries.filter { $0.folder == folder && $0.name == name }
         } else {
-            matches = items.filter { $0.name == path }
+            matches = entries.filter { $0.name == path }
         }
         switch matches.count {
         case 0: throw .notFound(path)
         case 1: return matches[0]
         default: throw .ambiguous(path, count: matches.count)
         }
-    }
-
-    /// `password`, `username` and `notes` read the built-in fields; anything
-    /// else is a custom field, matched case-insensitively.
-    public func value(at path: String, field: String = "password") throws(SecretLookupError) -> String {
-        let item = try item(at: path)
-        let value: String? = switch field.lowercased() {
-        case "password": item.password
-        case "username": item.username
-        case "notes": item.notes
-        default: item.fields.first { $0.key.caseInsensitiveCompare(field) == .orderedSame }?.value
-        }
-        guard let value else { throw .fieldNotFound(field) }
-        return value
     }
 }

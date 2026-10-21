@@ -12,6 +12,9 @@ CONFIGURATION="${CONFIGURATION:-release}"
 APP="$ROOT/build/Deskwarden.app"
 
 cd "$ROOT"
+if [[ ! -f Vendor/BitwardenSdk/Package.swift ]]; then
+  ./scripts/build-bitwarden-sdk.sh
+fi
 swift build --configuration "$CONFIGURATION" --product Deskwarden
 BIN_DIR="$(swift build --configuration "$CONFIGURATION" --show-bin-path)"
 

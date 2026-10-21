@@ -15,6 +15,12 @@ struct DeskwardenApp: App {
         Settings {
             SettingsView(model: model)
         }
+
+        Window("Unlock Deskwarden", id: UnlockView.windowID) {
+            UnlockView(model: model)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
     }
 }
 

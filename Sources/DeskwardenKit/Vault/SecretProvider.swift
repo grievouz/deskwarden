@@ -7,14 +7,15 @@ public protocol SecretProvider: Sendable {
     func value(at path: String, field: String) async throws(SecretLookupError) -> String
 }
 
-/// Serves a fixed set of items. Used by tests and the socket harness, and by
-/// the app until it can unlock a real Bitwarden vault.
-public struct IndexSecretProvider: SecretProvider {
+/// Serves a fixed set of items. Used by tests and the socket harness.
+public struct StaticSecretProvider: SecretProvider {
+    let items: [String: VaultItem]?
     let index: VaultIndex?
 
     /// `nil` behaves like a locked vault.
-    public init(index: VaultIndex?) {
-        self.index = index
+    public init(items: [VaultItem]?) {
+        self.items = items.map { Dictionary(uniqueKeysWithValues: $0.map { ($0.id, $0) }) }
+        self.index = items.map { VaultIndex(entries: $0.map(\.entry)) }
     }
 
     public var isLocked: Bool {
@@ -22,7 +23,9 @@ public struct IndexSecretProvider: SecretProvider {
     }
 
     public func value(at path: String, field: String) async throws(SecretLookupError) -> String {
-        guard let index else { throw .locked }
-        return try index.value(at: path, field: field)
+        guard let index, let items else { throw .locked }
+        let entry = try index.entry(at: path)
+        guard let item = items[entry.id] else { throw .notFound(path) }
+        return try item.value(of: field)
     }
 }

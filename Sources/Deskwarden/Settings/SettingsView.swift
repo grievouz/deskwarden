@@ -5,7 +5,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            AccountSection()
+            AccountSection(model: model)
             GeneralSection(model: model)
             ApplicationsSection(model: model)
         }

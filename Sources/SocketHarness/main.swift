@@ -15,7 +15,7 @@ guard arguments.count == 2 else {
 }
 let environment = ProcessInfo.processInfo.environment
 
-let fixtures = VaultIndex(items: [
+let fixtures = [
     VaultItem(
         id: "5f0c6d1e-2b8a-4c3e-9a51-1d2f3e4a5b6c",
         name: "Postgres prod",
@@ -27,12 +27,12 @@ let fixtures = VaultIndex(items: [
     VaultItem(id: "7a1b2c3d-0000-4000-8000-000000000001", name: "Stripe", folder: "Infra", password: "sk_test_infra"),
     VaultItem(id: "7a1b2c3d-0000-4000-8000-000000000002", name: "Stripe", folder: "Personal", password: "sk_test_personal"),
     VaultItem(id: "7a1b2c3d-0000-4000-8000-000000000003", name: "Deploy notes", notes: "line one\nline two"),
-])
+]
 
 let application = ExternalApplication.generate(name: "harness")
 let server = SecretsServer(
     socketPath: arguments[1],
-    secrets: IndexSecretProvider(index: environment["DESKWARDEN_HARNESS_LOCKED"] == "1" ? nil : fixtures),
+    secrets: StaticSecretProvider(items: environment["DESKWARDEN_HARNESS_LOCKED"] == "1" ? nil : fixtures),
     approvals: FixedApprover(approved: environment["DESKWARDEN_HARNESS_DENY"] != "1")
 )
 server.onStatusChange = { status in

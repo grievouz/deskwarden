@@ -1,14 +1,10 @@
+import AppKit
+import DeskwardenAccount
 import DeskwardenKit
 import Foundation
 import Observation
 import OSLog
 import ServiceManagement
-
-enum VaultState {
-    case signedOut
-    case locked
-    case unlocked
-}
 
 enum RequestVerification: String, CaseIterable, Identifiable {
     case everyRequest
@@ -50,11 +46,12 @@ final class AppModel {
         static let secretsSocketEnabled = "secretsSocketEnabled"
         static let sshAgentEnabled = "sshAgentEnabled"
         static let requestVerification = "requestVerification"
+        static let deviceIdentifier = "deviceIdentifier"
     }
 
     nonisolated private static let logger = Logger(subsystem: "io.github.grievouz.deskwarden", category: "app")
 
-    private(set) var vaultState = VaultState.signedOut
+    let account: AccountManager
     private(set) var applications: [ExternalApplication] = []
     private(set) var keychainError: String?
     private(set) var launchAtLoginError: String?
@@ -98,6 +95,7 @@ final class AppModel {
     private let approver: TouchIDApprover
     private let applicationStore: ApplicationStore = KeychainApplicationStore()
     private let defaults = UserDefaults.standard
+    private var wakeObserver: NSObjectProtocol?
 
     init() {
         defaults.register(defaults: [
@@ -110,13 +108,24 @@ final class AppModel {
             .flatMap(RequestVerification.init(rawValue:)) ?? .firstRequest
         requestVerification = verification
 
-        approver = TouchIDApprover(policy: verification.policy)
-        // Until Bitwarden sign-in exists there is no vault, so every request reports it as locked.
+        // Identifies this Mac to Bitwarden, so it's recognized as a known device.
+        let deviceIdentifier = defaults.string(forKey: DefaultsKey.deviceIdentifier) ?? {
+            let identifier = UUID().uuidString.lowercased()
+            UserDefaults.standard.set(identifier, forKey: DefaultsKey.deviceIdentifier)
+            return identifier
+        }()
+        account = AccountManager(deviceIdentifier: deviceIdentifier)
+
+        let approver = TouchIDApprover(policy: verification.policy)
+        self.approver = approver
         secretsServer = SecretsServer(
             socketPath: SecretsServer.defaultSocketPath,
-            secrets: IndexSecretProvider(index: nil),
+            secrets: account.secretProvider,
             approvals: approver
         )
+        account.onLock = {
+            Task { await approver.forgetApprovals() }
+        }
         secretsServer.onStatusChange = { status in
             if case .failed(let message) = status {
                 Self.logger.error("Secrets socket failed: \(message, privacy: .public)")
@@ -128,22 +137,31 @@ final class AppModel {
 
         loadApplications()
         applySecretsSocket()
-    }
 
-    var menuBarSymbol: String {
-        vaultState == .unlocked ? "lock.open" : "lock"
-    }
-
-    var statusTitle: String {
-        switch vaultState {
-        case .signedOut: "Not signed in"
-        case .locked: "Locked"
-        case .unlocked: "Unlocked"
+        // The periodic check can be hours late after sleep.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.account.syncIfChanged() }
         }
     }
 
-    func lock() {
-        Task { await approver.forgetApprovals() }
+    var isUnlocked: Bool {
+        if case .unlocked = account.status { true } else { false }
+    }
+
+    var menuBarSymbol: String {
+        isUnlocked ? "lock.open" : "lock"
+    }
+
+    var statusTitle: String {
+        switch account.status {
+        case .signedOut: "Not signed in"
+        case .locked(let email, _): "\(email) · Locked"
+        case .unlocked(let email, _): "\(email) · Unlocked"
+        }
     }
 
     // MARK: - External applications

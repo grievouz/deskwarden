@@ -44,6 +44,8 @@ Needs Xcode 16+ (Swift 6) on macOS 15+, and `rustup` for the Bitwarden SDK.
 
 `bundle.sh` builds the SDK first if `Vendor/BitwardenSdk` is missing, then signs with your Developer ID or Apple Development identity if there is one. Use a stable identity: the application keys and the Bitwarden session sit in the login keychain under the app's signature, so an ad hoc build asks for keychain access again after every rebuild.
 
+By default the app gets a drawn icon and an SF Symbol in the menu bar. For Bitwarden's own app icon and shield, run `./scripts/fetch-bitwarden-icons.sh` before `bundle.sh`: it puts them in `Branding/`, which is gitignored because Bitwarden's trademark guidelines don't let third-party software ship its logos.
+
 ```bash
 swift build
 swift test

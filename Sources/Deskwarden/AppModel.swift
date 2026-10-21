@@ -152,10 +152,6 @@ final class AppModel {
         if case .unlocked = account.status { true } else { false }
     }
 
-    var menuBarSymbol: String {
-        isUnlocked ? "lock.open" : "lock"
-    }
-
     var statusTitle: String {
         switch account.status {
         case .signedOut: "Not signed in"

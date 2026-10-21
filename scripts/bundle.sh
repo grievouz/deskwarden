@@ -23,6 +23,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Deskwarden" "$APP/Contents/MacOS/Deskwarden"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 
+# Icons in Branding/ (gitignored, see fetch-bitwarden-icons.sh) replace the
+# defaults: a drawn app icon and an SF Symbol in the menu bar.
+if [[ -f "$ROOT/Branding/AppIcon.icns" ]]; then
+  cp "$ROOT/Branding/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+else
+  [[ -f "$ROOT/build/AppIcon.icns" ]] || swift "$ROOT/scripts/make-app-icon.swift" "$ROOT/build/AppIcon.icns"
+  cp "$ROOT/build/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+fi
+if [[ -f "$ROOT/Branding/MenuBarIcon.pdf" ]]; then
+  cp "$ROOT/Branding/MenuBarIcon.pdf" "$APP/Contents/Resources/MenuBarIcon.pdf"
+fi
+
 IDENTITY="${DESKWARDEN_SIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning \

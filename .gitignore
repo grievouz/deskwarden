@@ -8,3 +8,4 @@
 *.xcodeproj/xcuserdata/
 node_modules/
 dist/
+/Branding/

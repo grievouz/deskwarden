@@ -1,0 +1,117 @@
+import Foundation
+import Testing
+@testable import DeskwardenKit
+
+struct ApprovalTests {
+    /// Counts prompts and answers them all the same way.
+    final class FakePrompt: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _count = 0
+        let answer: Bool
+
+        init(answer: Bool = true) {
+            self.answer = answer
+        }
+
+        var count: Int { lock.withLock { _count } }
+
+        var prompt: TouchIDApprover.Prompt {
+            { [self] _ in
+                lock.withLock { _count += 1 }
+                return answer
+            }
+        }
+    }
+
+    func request(app: String = "app", connection: UUID = UUID()) -> ApprovalRequest {
+        ApprovalRequest(applicationId: app, applicationName: app, connectionId: connection, client: nil, path: "Item")
+    }
+
+    @Test func everyRequestPromptsEachTime() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .everyRequest, prompt: fake.prompt)
+        let connection = UUID()
+        for _ in 0..<3 {
+            #expect(await approver.approve(request(connection: connection)))
+        }
+        #expect(fake.count == 3)
+    }
+
+    @Test func firstRequestPromptsOncePerConnection() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
+        let first = UUID()
+        let second = UUID()
+        _ = await approver.approve(request(connection: first))
+        _ = await approver.approve(request(connection: first))
+        #expect(fake.count == 1)
+        _ = await approver.approve(request(connection: second))
+        #expect(fake.count == 2)
+    }
+
+    @Test func intervalPromptsOncePerApplication() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
+        _ = await approver.approve(request(app: "a"))
+        _ = await approver.approve(request(app: "a"))
+        #expect(fake.count == 1)
+        _ = await approver.approve(request(app: "b"))
+        #expect(fake.count == 2)
+    }
+
+    @Test func expiredIntervalPromptsAgain() async throws {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .interval(.milliseconds(10)), prompt: fake.prompt)
+        _ = await approver.approve(request())
+        try await Task.sleep(for: .milliseconds(20))
+        _ = await approver.approve(request())
+        #expect(fake.count == 2)
+    }
+
+    @Test func neverDoesNotPrompt() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .never, prompt: fake.prompt)
+        #expect(await approver.approve(request()))
+        #expect(fake.count == 0)
+    }
+
+    @Test func deniedPromptsAreNotRemembered() async {
+        let fake = FakePrompt(answer: false)
+        let approver = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
+        #expect(await !approver.approve(request()))
+        #expect(await !approver.approve(request()))
+        #expect(fake.count == 2)
+    }
+
+    @Test func concurrentRequestsShareOnePrompt() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
+        let connection = UUID()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<10 {
+                group.addTask { _ = await approver.approve(request(connection: connection)) }
+            }
+        }
+        #expect(fake.count == 1)
+    }
+
+    @Test func forgettingApprovalsPromptsAgain() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
+        _ = await approver.approve(request())
+        await approver.forgetApprovals()
+        _ = await approver.approve(request())
+        #expect(fake.count == 2)
+    }
+
+    @Test func reasonNamesApplicationAndProject() {
+        let request = ApprovalRequest(
+            applicationId: "k",
+            applicationName: "varlock",
+            connectionId: UUID(),
+            client: ClientInfo(name: "something else", pid: 42, cwd: "/Users/me/code/shop"),
+            path: "Infra/Stripe"
+        )
+        #expect(TouchIDApprover.reason(for: request) == "let varlock in shop read Infra/Stripe")
+    }
+}

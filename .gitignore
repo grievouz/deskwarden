@@ -1,0 +1,10 @@
+.DS_Store
+/AGENTS.md
+/.build/
+/.swiftpm/
+/.local/
+/build/
+/Vendor/BitwardenSdk/
+*.xcodeproj/xcuserdata/
+node_modules/
+dist/

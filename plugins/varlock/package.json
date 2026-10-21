@@ -1,0 +1,31 @@
+{
+  "name": "deskwarden-varlock-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Varlock plugin that reads Bitwarden vault items through the Deskwarden menu bar app",
+  "type": "module",
+  "exports": {
+    "./plugin": "./dist/plugin.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "tsdown && node --experimental-strip-types --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "peerDependencies": {
+    "varlock": ">=1.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsdown": "0.23.1",
+    "typescript": "7.0.2",
+    "varlock": "1.23.0"
+  }
+}

@@ -114,7 +114,13 @@ Host *
 # End of Deskwarden
 ```
 
-`IdentityAgent` reaches every `ssh` run, including from apps opened in the Dock, which don't see a shell's `SSH_AUTH_SOCK`, and it takes precedence over `SSH_AUTH_SOCK` for `ssh`. Being at the end, an `IdentityAgent` you set for specific hosts earlier in the file still wins. A symlinked `~/.ssh/config` is written through, not replaced. Tools that talk to the agent directly, like `ssh-add`, only read `SSH_AUTH_SOCK`; point it at `~/.deskwarden/ssh-agent.sock` for them, e.g. `SSH_AUTH_SOCK=~/.deskwarden/ssh-agent.sock ssh-add -L`.
+`IdentityAgent` reaches every `ssh` run, including from apps opened in the Dock, which don't see a shell's `SSH_AUTH_SOCK`, and it takes precedence over `SSH_AUTH_SOCK` for `ssh`. Being at the end, an `IdentityAgent` you set for specific hosts earlier in the file still wins. A symlinked `~/.ssh/config` is written through, not replaced. Tools that talk to the agent directly only read `SSH_AUTH_SOCK`: `ssh-add`, and git's SSH commit signing (`gpg.format ssh`), which signs through `ssh-keygen`. For them, also export it in your shell, e.g. in fish:
+
+```fish
+set -gx SSH_AUTH_SOCK "$HOME/.deskwarden/ssh-agent.sock"
+```
+
+Shells started inside tmux or herdr pick this up too, since their shell config runs again.
 
 The agent serves the vault's SSH key items: Ed25519, ECDSA (P-256, P-384, P-521) and RSA, with SHA-2 signatures for RSA when the client asks for them, which current OpenSSH always does. `ssh-add -L` lists them, named after their vault items.
 

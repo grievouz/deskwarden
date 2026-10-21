@@ -19,7 +19,7 @@ enum RequestVerification: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .everyRequest: "Every request"
-        case .firstRequest: "First request only"
+        case .firstRequest: "First request per unlock"
         case .every5Minutes: "Every 5 minutes"
         case .every15Minutes: "Every 15 minutes"
         case .everyHour: "Every hour"

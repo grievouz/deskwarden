@@ -37,16 +37,19 @@ struct ApprovalTests {
         #expect(fake.count == 3)
     }
 
-    @Test func firstRequestPromptsOncePerConnection() async {
+    @Test func firstRequestPromptsOncePerApplicationUntilLocked() async {
         let fake = FakePrompt()
         let approver = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
-        let first = UUID()
-        let second = UUID()
-        _ = await approver.approve(request(connection: first))
-        _ = await approver.approve(request(connection: first))
+        // Separate connections, like one ssh or varlock run after another.
+        _ = await approver.approve(request(app: "a"))
+        _ = await approver.approve(request(app: "a"))
         #expect(fake.count == 1)
-        _ = await approver.approve(request(connection: second))
+        _ = await approver.approve(request(app: "b"))
         #expect(fake.count == 2)
+        // Locking forgets them.
+        await approver.forgetApprovals()
+        _ = await approver.approve(request(app: "a"))
+        #expect(fake.count == 3)
     }
 
     @Test func intervalPromptsOncePerApplication() async {
@@ -104,12 +107,11 @@ struct ApprovalTests {
         #expect(fake.count == 2)
     }
 
-    @Test func recordedUnlockCountsForTheConnectionAndInterval() async {
+    @Test func recordedUnlockCountsForTheApplication() async {
         let fake = FakePrompt()
-        let connection = UUID()
         let first = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
-        await first.record(request(connection: connection))
-        #expect(await first.approve(request(connection: connection)))
+        await first.record(request(app: "a"))
+        #expect(await first.approve(request(app: "a")))
         let interval = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
         await interval.record(request(app: "a"))
         #expect(await interval.approve(request(app: "a")))

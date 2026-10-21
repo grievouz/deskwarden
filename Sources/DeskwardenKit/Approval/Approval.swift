@@ -56,7 +56,8 @@ public struct FixedApprover: ApprovalProvider {
 /// How often an application's requests need Touch ID.
 public enum VerificationPolicy: Sendable, Hashable {
     case everyRequest
-    /// The first request on each connection, so one run of a tool asks once.
+    /// The first request from each application after the vault is unlocked;
+    /// it isn't asked again until the vault locks.
     case firstRequest
     /// Once per application, then not again until the interval has passed.
     case interval(Duration)
@@ -70,7 +71,7 @@ public actor TouchIDApprover: ApprovalProvider {
 
     public private(set) var policy: VerificationPolicy
     private let prompt: Prompt
-    private var approvedConnections: Set<UUID> = []
+    private var approvedApplications: Set<String> = []
     private var approvedAt: [String: ContinuousClock.Instant] = [:]
     private var pending: [String: Task<Bool, Never>] = [:]
 
@@ -84,22 +85,18 @@ public actor TouchIDApprover: ApprovalProvider {
         forgetApprovals()
     }
 
-    /// Makes the next request from every application ask again, e.g. after locking.
+    /// Makes the next request from every application ask again. The app calls
+    /// this when the vault locks.
     public func forgetApprovals() {
-        approvedConnections.removeAll()
+        approvedApplications.removeAll()
         approvedAt.removeAll()
     }
 
-    // `async` like the protocol's defaults, so calls on the actor itself don't
-    // resolve to those no-op defaults instead.
-
-    public func connectionClosed(_ connectionId: UUID) async {
-        approvedConnections.remove(connectionId)
-    }
-
+    // `async` like the protocol's default, so calls on the actor itself don't
+    // resolve to that no-op default instead.
     public func record(_ request: ApprovalRequest) async {
         switch policy {
-        case .firstRequest: approvedConnections.insert(request.connectionId)
+        case .firstRequest: approvedApplications.insert(request.applicationId)
         case .interval: approvedAt[request.applicationId] = .now
         case .everyRequest, .never: break
         }
@@ -112,9 +109,9 @@ public actor TouchIDApprover: ApprovalProvider {
         case .everyRequest:
             return await prompt(request)
         case .firstRequest:
-            if approvedConnections.contains(request.connectionId) { return true }
-            let approved = await sharedPrompt(for: request, key: request.connectionId.uuidString)
-            if approved { approvedConnections.insert(request.connectionId) }
+            if approvedApplications.contains(request.applicationId) { return true }
+            let approved = await sharedPrompt(for: request, key: request.applicationId)
+            if approved { approvedApplications.insert(request.applicationId) }
             return approved
         case .interval(let interval):
             if let at = approvedAt[request.applicationId], at.duration(to: .now) < interval { return true }

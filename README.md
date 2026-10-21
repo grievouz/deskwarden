@@ -184,8 +184,8 @@ Error codes: `bad_request`, `unauthorized`, `locked`, `denied`, `not_found`, `am
 
 **Verification.** **Verify requests** in Settings decides how often a request needs Touch ID (falling back to the account password):
 
-- **Every request**: every `get`.
-- **First request only** (default): the first `get` on each connection, so one run of a tool asks once.
+- **Every request**: every `get` and every SSH signature.
+- **First request per unlock** (default): the first request from each application after the vault unlocks; it isn't asked again until the vault locks.
 - **Every 5 / 15 / 60 minutes**: once per application, then not again until the time has passed.
 - **Never**: no prompt.
 

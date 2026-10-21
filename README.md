@@ -163,7 +163,9 @@ Error codes: `bad_request`, `unauthorized`, `locked`, `denied`, `not_found`, `am
 - **Every 5 / 15 / 60 minutes**: once per application, then not again until the time has passed.
 - **Never**: no prompt.
 
-Denying a prompt denies the rest of that connection's requests. A locked vault fails without prompting.
+Denying a prompt denies the rest of that connection's requests.
+
+**Locked vault.** A request that arrives while the vault is locked asks for Touch ID to unlock it ("unlock your vault so varlock in shop can read Infra/Stripe"), and that prompt also counts as verifying the request. Requests arriving together share the prompt. If it's dismissed, or Touch ID isn't set up yet, the request fails with `locked`, and so does the rest of that connection.
 
 ## Security model
 

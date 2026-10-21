@@ -4,7 +4,8 @@
 //   SocketHarness <socket-path>
 //
 // Prints `READY <key>` once listening. DESKWARDEN_HARNESS_DENY=1 denies
-// every approval and DESKWARDEN_HARNESS_LOCKED=1 behaves like a locked vault.
+// every approval. DESKWARDEN_HARNESS_LOCKED=1 behaves like a locked vault, and
+// DESKWARDEN_HARNESS_LOCKED=unlockable like one that unlocks when asked.
 import DeskwardenKit
 import Foundation
 
@@ -32,7 +33,11 @@ let fixtures = [
 let application = ExternalApplication.generate(name: "harness")
 let server = SecretsServer(
     socketPath: arguments[1],
-    secrets: StaticSecretProvider(items: environment["DESKWARDEN_HARNESS_LOCKED"] == "1" ? nil : fixtures),
+    secrets: StaticSecretProvider(
+        items: fixtures,
+        locked: environment["DESKWARDEN_HARNESS_LOCKED"] != nil,
+        unlockable: environment["DESKWARDEN_HARNESS_LOCKED"] == "unlockable"
+    ),
     approvals: FixedApprover(approved: environment["DESKWARDEN_HARNESS_DENY"] != "1")
 )
 server.onStatusChange = { status in

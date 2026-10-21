@@ -79,6 +79,17 @@ struct VaultwardenTests {
         #expect(try await relaunched.secretProvider.value(at: "Infra/Postgres", field: "password") == "pg-secret")
         relaunched.lock()
 
+        // Requests arriving while locked unlock it, sharing one prompt.
+        let counter = OpenCounter()
+        let onDemand = AccountManager(store: store, keyProtector: FakeKeyProtector(counter: counter), deviceIdentifier: deviceIdentifier)
+        let request = ApprovalRequest(applicationId: "app", applicationName: "varlock", connectionId: UUID(), client: nil, path: "Infra/Postgres")
+        async let first = onDemand.secretProvider.unlock(for: request)
+        async let second = onDemand.secretProvider.unlock(for: request)
+        #expect(await [first, second] == [true, true])
+        #expect(counter.count == 1)
+        #expect(try await onDemand.secretProvider.value(at: "Infra/Postgres", field: "password") == "pg-secret")
+        onDemand.lock()
+
         // A dismissed prompt leaves Touch ID set up.
         let cancelled = AccountManager(store: store, keyProtector: FakeKeyProtector(failure: .cancelled), deviceIdentifier: deviceIdentifier)
         await #expect(throws: AccountError.unlock(.cancelled)) {
@@ -277,9 +288,22 @@ private struct TestClient {
     }
 }
 
+/// Counts Touch ID prompts.
+private final class OpenCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opens = 0
+
+    var count: Int { lock.withLock { opens } }
+
+    func increment() {
+        lock.withLock { opens += 1 }
+    }
+}
+
 /// Stands in for the Secure Enclave, which needs a finger on the sensor.
 private struct FakeKeyProtector: UserKeyProtector {
     var failure: TouchIDError?
+    var counter: OpenCounter?
 
     var isAvailable: Bool {
         true
@@ -290,6 +314,9 @@ private struct FakeKeyProtector: UserKeyProtector {
     }
 
     func open(_ sealed: Data, reason: String) async throws(TouchIDError) -> String {
+        counter?.increment()
+        // Long enough for concurrent unlocks to pile up behind one prompt.
+        try? await Task.sleep(for: .milliseconds(50))
         if let failure { throw failure }
         return String(decoding: Data(sealed.reversed()), as: UTF8.self)
     }

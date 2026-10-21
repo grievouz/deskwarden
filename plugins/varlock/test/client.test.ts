@@ -88,6 +88,14 @@ describe('connection failures', () => {
     await harness.stop();
   });
 
+  test('unlocks a locked vault when asked', async () => {
+    const harness = await startHarness({ DESKWARDEN_HARNESS_LOCKED: 'unlockable' });
+    const client = new DeskwardenClient({ key: harness.key, socketPath: harness.socketPath });
+    assert.equal(await client.get('Infra/Stripe'), 'sk_test_infra');
+    client.close();
+    await harness.stop();
+  });
+
   test('rejects strings that are not Deskwarden keys', () => {
     assert.throws(() => parseKey('not-a-key'), { code: 'unauthorized' });
     assert.throws(() => parseKey('dwk_0011_tooshort'), { code: 'unauthorized' });

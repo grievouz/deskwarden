@@ -28,9 +28,11 @@ final class SecretsConnection: @unchecked Sendable {
 
     // Only touched by the frame-handling task.
     private var state = State.awaitingAuth
-    /// Once a request is denied, the rest of the connection is too, so a
-    /// client firing many requests doesn't keep prompting.
+    /// Once a request is denied, or unlocking for it is turned down, the rest
+    /// of the connection is too, so a client firing many requests doesn't
+    /// keep prompting.
     private var denied = false
+    private var unlockDeclined = false
 
     /// The application the client authenticated as. Read from `queue`.
     private(set) var applicationId: String?
@@ -155,18 +157,25 @@ final class SecretsConnection: @unchecked Sendable {
     }
 
     private func serve(_ get: ClientMessage.Get, application: ExternalApplication, client: ClientInfo?) async {
+        let request = ApprovalRequest(
+            applicationId: application.id,
+            applicationName: application.name,
+            connectionId: id,
+            client: client,
+            path: get.path
+        )
+        // Unlocking asks for Touch ID, which then also verifies this request.
+        var verified = false
         if await secrets.isLocked {
-            send(Self.errorMessage(for: .locked, requestId: get.id))
-            return
+            guard !unlockDeclined, await secrets.unlock(for: request) else {
+                unlockDeclined = true
+                send(Self.errorMessage(for: .locked, requestId: get.id))
+                return
+            }
+            await approvals.record(request)
+            verified = true
         }
-        if !denied {
-            let request = ApprovalRequest(
-                applicationId: application.id,
-                applicationName: application.name,
-                connectionId: id,
-                client: client,
-                path: get.path
-            )
+        if !denied, !verified {
             denied = await !approvals.approve(request)
         }
         guard !denied else {

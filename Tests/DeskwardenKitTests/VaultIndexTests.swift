@@ -52,7 +52,7 @@ struct VaultIndexTests {
 
     @Test func lockedProviderReportsLocked() async {
         await #expect(throws: SecretLookupError.locked) {
-            try await StaticSecretProvider(items: nil).value(at: "Postgres", field: "password")
+            try await StaticSecretProvider(items: items, locked: true).value(at: "Postgres", field: "password")
         }
     }
 }

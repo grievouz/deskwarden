@@ -104,6 +104,27 @@ struct ApprovalTests {
         #expect(fake.count == 2)
     }
 
+    @Test func recordedUnlockCountsForTheConnectionAndInterval() async {
+        let fake = FakePrompt()
+        let connection = UUID()
+        let first = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
+        await first.record(request(connection: connection))
+        #expect(await first.approve(request(connection: connection)))
+        let interval = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
+        await interval.record(request(app: "a"))
+        #expect(await interval.approve(request(app: "a")))
+        #expect(fake.count == 0)
+    }
+
+    @Test func recordedUnlockDoesNotSkipEveryRequest() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .everyRequest, prompt: fake.prompt)
+        let connection = UUID()
+        await approver.record(request(connection: connection))
+        _ = await approver.approve(request(connection: connection))
+        #expect(fake.count == 1)
+    }
+
     @Test func reasonNamesApplicationAndProject() {
         let request = ApprovalRequest(
             applicationId: "k",

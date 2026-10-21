@@ -63,6 +63,7 @@ public final class AccountManager {
     private var accessToken: AccessToken?
     private var lastRevisionDate: Date?
     private var syncTask: Task<Void, Never>?
+    private var pendingUnlock: Task<Bool, Never>?
 
     private struct PendingLogin {
         let api: BitwardenAPI
@@ -95,6 +96,9 @@ public final class AccountManager {
         if let account {
             status = .locked(email: account.email, server: account.server)
             canUnlockWithTouchID = store.loadSealedUserKey() != nil
+        }
+        secretProvider.setUnlockHandler { [weak self] request in
+            await self?.unlock(for: request) ?? false
         }
     }
 
@@ -242,11 +246,11 @@ public final class AccountManager {
     }
 
     /// Asks for Touch ID and unlocks with the user key it opens.
-    public func unlockWithTouchID() async throws(AccountError) {
+    public func unlockWithTouchID(reason: String = "unlock your vault") async throws(AccountError) {
         guard let account, let sealed = store.loadSealedUserKey() else { throw .unlock(.needsMasterPassword) }
         let userKey: String
         do {
-            userKey = try await keyProtector.open(sealed, reason: "unlock your vault")
+            userKey = try await keyProtector.open(sealed, reason: reason)
         } catch .cancelled {
             throw .unlock(.cancelled)
         } catch .invalidated {
@@ -267,13 +271,38 @@ public final class AccountManager {
         await open(session)
     }
 
-    private func open(_ session: VaultSession) async {
-        // The cached vault makes the items available right away, even offline.
-        if let data = store.loadVault(), let cached = try? BitwardenJSON.decoder().decode(SyncResponse.self, from: data) {
-            try? await session.load(cached)
+    /// Unlocks with Touch ID for a request that arrived while locked. Requests
+    /// arriving together share one prompt.
+    func unlock(for request: ApprovalRequest) async -> Bool {
+        if case .unlocked = status { return true }
+        guard case .locked = status, canUnlockWithTouchID else { return false }
+        if let pendingUnlock {
+            return await pendingUnlock.value
         }
-        await activate(session)
-        await sync()
+        let task = Task { () -> Bool in
+            do {
+                try await unlockWithTouchID(reason: "unlock your vault so \(request.requester) can read \(request.path)")
+                return true
+            } catch {
+                return false
+            }
+        }
+        pendingUnlock = task
+        defer { pendingUnlock = nil }
+        return await task.value
+    }
+
+    private func open(_ session: VaultSession) async {
+        // The cached vault makes the items available right away, even
+        // offline, so the sync can finish in the background.
+        if let data = store.loadVault(), let cached = try? BitwardenJSON.decoder().decode(SyncResponse.self, from: data),
+           (try? await session.load(cached)) != nil {
+            await activate(session)
+            Task { await sync() }
+        } else {
+            await activate(session)
+            await sync()
+        }
     }
 
     /// Keeps the user key, sealed for Touch ID, so later unlocks don't need the
@@ -415,17 +444,28 @@ public final class AccountManager {
     }
 }
 
-/// Lets the secrets socket read whichever vault is unlocked right now.
+/// Lets the secrets socket read whichever vault is unlocked right now, and
+/// unlock it with Touch ID when a request arrives while it's locked.
 public final class VaultSecretProvider: SecretProvider {
     private let current = Mutex<VaultSession?>(nil)
+    private let unlockHandler = Mutex<(@Sendable (ApprovalRequest) async -> Bool)?>(nil)
 
     var session: VaultSession? {
         get { current.withLock { $0 } }
         set { current.withLock { $0 = newValue } }
     }
 
+    func setUnlockHandler(_ handler: @escaping @Sendable (ApprovalRequest) async -> Bool) {
+        unlockHandler.withLock { $0 = handler }
+    }
+
     public var isLocked: Bool {
         session == nil
+    }
+
+    public func unlock(for request: ApprovalRequest) async -> Bool {
+        guard let handler = unlockHandler.withLock({ $0 }) else { return false }
+        return await handler(request)
     }
 
     public func value(at path: String, field: String) async throws(SecretLookupError) -> String {

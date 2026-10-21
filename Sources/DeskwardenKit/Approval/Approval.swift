@@ -8,14 +8,33 @@ public struct ApprovalRequest: Sendable {
     public let connectionId: UUID
     public let client: ClientInfo?
     public let path: String
+
+    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, path: String) {
+        self.applicationId = applicationId
+        self.applicationName = applicationName
+        self.connectionId = connectionId
+        self.client = client
+        self.path = path
+    }
+
+    /// Who's asking, for prompts: the application as the user registered it,
+    /// plus the client's self-reported working directory as context.
+    public var requester: String {
+        guard let cwd = client?.cwd else { return applicationName }
+        return "\(applicationName) in \(URL(fileURLWithPath: cwd).lastPathComponent)"
+    }
 }
 
 public protocol ApprovalProvider: Sendable {
     func approve(_ request: ApprovalRequest) async -> Bool
+    /// Counts a Touch ID prompt shown for another reason, such as unlocking
+    /// the vault for this request, as verifying it.
+    func record(_ request: ApprovalRequest) async
     func connectionClosed(_ connectionId: UUID) async
 }
 
 extension ApprovalProvider {
+    public func record(_ request: ApprovalRequest) async {}
     public func connectionClosed(_ connectionId: UUID) async {}
 }
 
@@ -69,8 +88,19 @@ public actor TouchIDApprover: ApprovalProvider {
         approvedAt.removeAll()
     }
 
-    public func connectionClosed(_ connectionId: UUID) {
+    // `async` like the protocol's defaults, so calls on the actor itself don't
+    // resolve to those no-op defaults instead.
+
+    public func connectionClosed(_ connectionId: UUID) async {
         approvedConnections.remove(connectionId)
+    }
+
+    public func record(_ request: ApprovalRequest) async {
+        switch policy {
+        case .firstRequest: approvedConnections.insert(request.connectionId)
+        case .interval: approvedAt[request.applicationId] = .now
+        case .everyRequest, .never: break
+        }
     }
 
     public func approve(_ request: ApprovalRequest) async -> Bool {
@@ -109,14 +139,8 @@ public actor TouchIDApprover: ApprovalProvider {
         return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason(for: request))) ?? false
     }
 
-    /// Completes the system prompt's "Deskwarden is trying to …". Names the
-    /// application as the user registered it; the client's working directory
-    /// is self-reported and only adds context.
+    /// Completes the system prompt's "Deskwarden is trying to …".
     static func reason(for request: ApprovalRequest) -> String {
-        var application = request.applicationName
-        if let cwd = request.client?.cwd {
-            application += " in \(URL(fileURLWithPath: cwd).lastPathComponent)"
-        }
-        return "let \(application) read \(request.path)"
+        "let \(request.requester) read \(request.path)"
     }
 }

@@ -173,6 +173,7 @@ final class AppModel {
         }
         self.sshAgent = sshAgent
         applySSHAgent()
+        updateSSHConfig()
 
         if account.canUnlockWithTouchID {
             Task { _ = await self.unlockWithTouchID() }

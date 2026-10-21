@@ -18,7 +18,7 @@ It isn't a full Bitwarden client and isn't affiliated with Bitwarden, Inc.
 | Bitwarden sign-in (2FA by authenticator app or email, new-device code), unlock, lock, log out | Works; tested end to end against Vaultwarden |
 | Automatic sync | Works: checks every minute and after wake, syncs when the vault changed |
 | Touch ID unlock, prompted when Deskwarden opens | Works; the first master-password unlock sets it up |
-| Auto-lock (on sleep, screen lock, idle) | Planned |
+| Auto-lock on sleep (default on) or screen lock (default off) | Works |
 | SSH agent | Planned |
 
 ## Layout
@@ -182,7 +182,7 @@ Planned: verify the requesting process from the kernel (its PID and process tree
 
 ## Roadmap
 
-1. **Auto-lock** on sleep, screen lock or after a period of inactivity.
+1. **Lock after a period of inactivity.**
 2. **SSH agent.** Serve the vault's SSH key items on `~/.deskwarden/ssh-agent.sock`, verified like secrets requests. `ssh` and `git` speak the plain agent protocol and can't present a key, so SSH clients are identified by their process instead. [Secretive](https://github.com/maxgoedjen/Secretive) (MIT) has a native Swift agent with a pluggable key store to build on.
 
 The official [iOS app](https://github.com/bitwarden/ios) is the reference for Bitwarden's API: its request fields, error handling and SDK record mapping are what `DeskwardenAccount` follows.

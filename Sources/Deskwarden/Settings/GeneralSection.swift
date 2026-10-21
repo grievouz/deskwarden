@@ -30,6 +30,9 @@ struct GeneralSection: View {
                 Text("How often requests from SSH clients and external applications need Touch ID.")
             }
 
+            Toggle("Lock when the Mac sleeps", isOn: $model.lockOnSleep)
+            Toggle("Lock when the screen locks", isOn: $model.lockOnScreenLock)
+
             Toggle("Open at login", isOn: $model.launchAtLogin)
             if let error = model.launchAtLoginError {
                 Text(error).foregroundStyle(.red)

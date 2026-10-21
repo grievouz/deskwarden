@@ -46,6 +46,8 @@ final class AppModel {
         static let secretsSocketEnabled = "secretsSocketEnabled"
         static let sshAgentEnabled = "sshAgentEnabled"
         static let requestVerification = "requestVerification"
+        static let lockOnSleep = "lockOnSleep"
+        static let lockOnScreenLock = "lockOnScreenLock"
         static let deviceIdentifier = "deviceIdentifier"
     }
 
@@ -75,6 +77,14 @@ final class AppModel {
         }
     }
 
+    var lockOnSleep: Bool {
+        didSet { defaults.set(lockOnSleep, forKey: DefaultsKey.lockOnSleep) }
+    }
+
+    var lockOnScreenLock: Bool {
+        didSet { defaults.set(lockOnScreenLock, forKey: DefaultsKey.lockOnScreenLock) }
+    }
+
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -95,15 +105,19 @@ final class AppModel {
     private let approver: TouchIDApprover
     private let applicationStore: ApplicationStore = KeychainApplicationStore()
     private let defaults = UserDefaults.standard
-    private var wakeObserver: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
 
     init() {
         defaults.register(defaults: [
             DefaultsKey.secretsSocketEnabled: true,
             DefaultsKey.requestVerification: RequestVerification.firstRequest.rawValue,
+            DefaultsKey.lockOnSleep: true,
+            DefaultsKey.lockOnScreenLock: false,
         ])
         sshAgentEnabled = defaults.bool(forKey: DefaultsKey.sshAgentEnabled)
         secretsSocketEnabled = defaults.bool(forKey: DefaultsKey.secretsSocketEnabled)
+        lockOnSleep = defaults.bool(forKey: DefaultsKey.lockOnSleep)
+        lockOnScreenLock = defaults.bool(forKey: DefaultsKey.lockOnScreenLock)
         let verification = defaults.string(forKey: DefaultsKey.requestVerification)
             .flatMap(RequestVerification.init(rawValue:)) ?? .firstRequest
         requestVerification = verification
@@ -142,14 +156,27 @@ final class AppModel {
             Task { _ = await self.unlockWithTouchID() }
         }
 
-        // The periodic check can be hours late after sleep.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in await self?.account.syncIfChanged() }
-        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        observers = [
+            workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if self?.lockOnSleep == true { self?.account.lock() }
+                }
+            },
+            // The periodic check can be hours late after sleep.
+            workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in await self?.account.syncIfChanged() }
+            },
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.apple.screenIsLocked"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if self?.lockOnScreenLock == true { self?.account.lock() }
+                }
+            },
+        ]
     }
 
     var isUnlocked: Bool {

@@ -96,6 +96,8 @@ plugin.registerRootDecorator({
 plugin.registerDataType({
   name: 'deskwardenKey',
   sensitive: true,
+  // Only the plugin needs it, so it isn't handed to the app with the values it fetches.
+  internal: true,
   typeDescription: 'Deskwarden application key (dwk_…), from Deskwarden → Settings → External Applications',
   async validate(value) {
     if (typeof value !== 'string' || !value.startsWith('dwk_')) {

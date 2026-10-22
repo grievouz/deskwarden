@@ -153,6 +153,8 @@ STRIPE_KEY=deskwarden("Stripe")
 
 Paths are `Folder/Item name` (nested folders are `Parent/Child/Item name`), just `Item name` when the name is unique, or an item id. `field` is `password` (default), `username`, `notes`, or any custom field name, matched case-insensitively. Two items matching the same path is an error, never a guess.
 
+`DESKWARDEN_KEY` is `@internal`, which needs varlock 1.23 or later: varlock uses it to fetch the other values but doesn't pass it to your app or the processes it starts (`@internal=false` on the item passes it anyway).
+
 `@initDeskwarden` also takes `socketPath=` (default `~/.deskwarden/secrets.sock`) and `id=` for more than one instance, used as `deskwarden(id, "Path")`.
 
 ## Secrets socket protocol

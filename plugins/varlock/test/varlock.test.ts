@@ -35,6 +35,7 @@ test('varlock resolves deskwarden() through the built plugin', async () => {
     assert.equal(env.DB_PASSWORD, 'pg-secret');
     assert.equal(env.DB_USER, 'app');
     assert.equal(env.DB_PORT, '5432');
+    assert.equal(env.DESKWARDEN_KEY, undefined, 'the key stays internal to varlock');
   } finally {
     rmSync(project, { recursive: true, force: true });
     await harness.stop();

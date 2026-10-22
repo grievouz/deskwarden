@@ -17,14 +17,26 @@ public struct ExternalApplication: Codable, Identifiable, Hashable, Sendable {
     public var name: String
     public let secret: Data?
     public let process: ProcessIdentity?
+    /// What the application may use without a prompt while the vault is
+    /// unlocked. `nil` means it's asked about anything, per Verify requests.
+    public var allowed: AccessSelection?
     public let createdAt: Date
     public var lastUsedAt: Date?
 
-    public init(id: String, name: String, secret: Data?, process: ProcessIdentity? = nil, createdAt: Date = .now, lastUsedAt: Date? = nil) {
+    public init(
+        id: String,
+        name: String,
+        secret: Data?,
+        process: ProcessIdentity? = nil,
+        allowed: AccessSelection? = nil,
+        createdAt: Date = .now,
+        lastUsedAt: Date? = nil
+    ) {
         self.id = id
         self.name = name
         self.secret = secret
         self.process = process
+        self.allowed = allowed
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }

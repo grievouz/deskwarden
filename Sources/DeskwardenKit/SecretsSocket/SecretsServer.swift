@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Security
+import Synchronization
 
 /// Serves vault values to external applications over a Unix socket.
 ///
@@ -29,7 +30,11 @@ public final class SecretsServer: @unchecked Sendable {
     // Only touched on `queue`.
     private var listener: NWListener?
     private var applications: [String: ExternalApplication] = [:]
+    private var listenerKeys: Set<String>?
     private var connections: [ObjectIdentifier: SecretsConnection] = [:]
+    /// The applications as they are now, so a change in what one may access
+    /// applies to its open connections too.
+    private let current = Mutex<[String: ExternalApplication]>([:])
 
     public var onStatusChange: (@Sendable (Status) -> Void)?
     /// Called with an application id each time a client authenticates as it.
@@ -55,6 +60,7 @@ public final class SecretsServer: @unchecked Sendable {
     public func stop() {
         queue.async {
             self.tearDown()
+            self.listenerKeys = nil
             for connection in self.connections.values {
                 connection.cancel()
             }
@@ -64,10 +70,15 @@ public final class SecretsServer: @unchecked Sendable {
     }
 
     private func restart(applications: [ExternalApplication]) {
-        tearDown()
         // SSH clients have no key, so they can't use this socket.
         let applications = applications.filter { $0.secret != nil }
         self.applications = Dictionary(uniqueKeysWithValues: applications.map { ($0.id, $0) })
+        current.withLock { $0 = self.applications }
+        // Only a change of keys needs a new listener.
+        let keys = Set(applications.compactMap { app in app.secret.map { "\(app.id):\($0.base64EncodedString())" } })
+        if listener != nil, keys == listenerKeys { return }
+        listenerKeys = keys
+        tearDown()
         // Unauthenticated connections hold the old set, so they go too.
         for connection in connections.values where connection.applicationId.map({ self.applications[$0] == nil }) ?? true {
             connection.cancel()
@@ -111,6 +122,7 @@ public final class SecretsServer: @unchecked Sendable {
             connection: nwConnection,
             queue: queue,
             applications: applications,
+            currentApplication: { [weak self] id in self?.current.withLock { $0[id] } },
             secrets: secrets,
             approvals: approvals
         )

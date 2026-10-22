@@ -13,6 +13,7 @@ It isn't a full Bitwarden client and isn't affiliated with Bitwarden, Inc.
 | --- | --- |
 | Menu bar app, Settings window | Works |
 | External applications (add, copy key, remove; stored in the login keychain) | Works |
+| Per-application access (selected folders, items or SSH keys skip the prompt) | Works |
 | Secrets socket (TLS-PSK, auth, Touch ID approval, path lookup) | Works |
 | varlock plugin | Works; tested end to end against the socket |
 | Bitwarden sign-in (2FA by authenticator app or email, new-device code), unlock, lock, log out | Works; tested end to end against Vaultwarden |
@@ -119,7 +120,8 @@ Host *
 The agent serves the vault's SSH key items: Ed25519, ECDSA (P-256, P-384, P-521) and RSA, with SHA-2 signatures for RSA when the client asks for them, which current OpenSSH always does. `ssh-add -L` lists them, named after their vault items.
 
 - **Listing keys** never asks, unless the vault is locked: then one Touch ID prompt unlocks it.
-- **Signing** follows **Verify requests**, like the secrets socket.
+- **Signing** follows **Verify requests**, like the secrets socket, remembered per key and server: approving "GitHub" for github.com doesn't approve it for another host.
+- **Selected keys**: with **Access** set to **Selected only**, the keys you pick sign without asking (except through a forwarded agent); any other key still asks.
 - **First use**: an app's first signature always asks ("let Alacritty use your SSH key “GitHub” (git → ssh)") and adds the app to **External Applications** as an SSH client. Removing it there means it's asked about again next time.
 - **Refusing** ends that connection's requests, so a client can't keep prompting by offering one key after another.
 
@@ -187,11 +189,18 @@ Error codes: `bad_request`, `unauthorized`, `locked`, `denied`, `not_found`, `am
 **Verification.** **Verify requests** in Settings decides how often a request needs Touch ID (falling back to the account password):
 
 - **Every request**: every `get` and every SSH signature.
-- **First request per unlock** (default): the first request from each application after the vault unlocks; it isn't asked again until the vault locks.
-- **Every 5 / 15 / 60 minutes**: once per application, then not again until the time has passed.
+- **First request per unlock** (default): the first request from each application for each item (or SSH key and server) after the vault unlocks; it isn't asked again until the vault locks.
+- **Every 5 / 15 / 60 minutes**: once per application and item, then not again until the time has passed.
 - **Never**: no prompt.
 
-Denying a prompt denies the rest of that connection's requests.
+Denying a prompt denies the rest of that connection's requests, except for what the application is allowed below.
+
+**Access.** Each application in **External Applications** has an **Access** menu:
+
+- **Ask for anything** (default): every item follows **Verify requests**.
+- **Selected only**: **Edit…** picks the folders and items it may read without a prompt (a folder includes its subfolders), or the SSH keys for an SSH client. Anything else still asks, per item, so an application that needs one more secret isn't simply refused.
+
+Choosing needs the vault unlocked, since folder and item names are encrypted. The selection is saved by id with the application's key in the keychain, so renaming or moving an item in Bitwarden keeps it selected, and moving it into a selected folder makes it allowed.
 
 **Locked vault.** A request that arrives while the vault is locked asks for Touch ID to unlock it ("unlock your vault so varlock in shop can read Infra/Stripe"), and that prompt also counts as verifying the request. Requests arriving together share the prompt. If it's dismissed, or Touch ID isn't set up yet, the request fails with `locked`, and so does the rest of that connection.
 

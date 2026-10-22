@@ -34,11 +34,15 @@ public protocol SSHApplicationRegistry: Sendable {
 /// Who may use the agent's keys.
 ///
 /// Listing keys never asks. Signing follows the verification setting, like
-/// secrets requests, except that an app's first use always asks and adds it to
-/// the external applications. A locked vault is unlocked with one Touch ID
-/// prompt that also counts as letting the app use the keys. Once a client is
-/// refused, the rest of its connection is too, so it can't keep prompting by
-/// offering one key after another.
+/// secrets requests, with approvals remembered per key and server, except:
+/// - an app's first use always asks, and adds it to the external applications;
+/// - keys selected for an app sign without asking;
+/// - a forwarded agent always asks, and never uses or adds to what's remembered;
+/// - unlocking a locked vault takes one Touch ID prompt, which also counts as
+///   letting the app use the keys on that connection.
+///
+/// Once a client is refused, the rest of its connection is too, so it can't
+/// keep prompting by offering one key after another.
 public actor SSHAccess: SSHAgentHandler {
     private static let logger = Logger(subsystem: "io.github.grievouz.deskwarden", category: "ssh-agent")
 
@@ -47,6 +51,8 @@ public actor SSHAccess: SSHAgentHandler {
     private let approvals: ApprovalProvider
     private let prompt: TouchIDApprover.Prompt
     private var refused: Set<UUID> = []
+    /// Connections whose unlock prompt already let the app in.
+    private var unlockedFor: Set<UUID> = []
 
     public init(
         keys: SSHKeyProvider,
@@ -70,8 +76,7 @@ public actor SSHAccess: SSHAgentHandler {
               let key = await keys.sshKeys().first(where: { $0.publicKeyBlob == keyBlob })
         else { return nil }
 
-        let action = Self.action(keyName: key.name, client: client, session: session)
-        guard let application = await authorize(client: client, connection: connection, action: action, remember: !session.isForwarded) else {
+        guard let application = await authorize(key, client: client, session: session, connection: connection) else {
             refused.insert(connection)
             return nil
         }
@@ -81,13 +86,14 @@ public actor SSHAccess: SSHAgentHandler {
             await applications.markUsed(application)
             return signature
         } catch {
-            Self.logger.error("Couldn't sign with \(key.name, privacy: .public): \(String(describing: error), privacy: .public)")
+            Self.logger.error("Couldn't sign with an SSH key: \(String(describing: error), privacy: .public)")
             return nil
         }
     }
 
     public func connectionClosed(_ connection: UUID) async {
         refused.remove(connection)
+        unlockedFor.remove(connection)
         await approvals.connectionClosed(connection)
     }
 
@@ -110,34 +116,48 @@ public actor SSHAccess: SSHAgentHandler {
             refused.insert(connection)
             return false
         }
-        let application: ExternalApplication
-        if let existing {
-            application = existing
-        } else if let added = await applications.addApplication(for: client) {
-            application = added
-        } else {
+        if existing == nil, await applications.addApplication(for: client) == nil {
             return false
         }
-        await approvals.record(Self.request(application, connection: connection, action: "use your SSH keys"))
+        unlockedFor.insert(connection)
         return true
     }
 
-    /// The application the client is recognized as, if it may sign.
-    /// `remember` is false for forwarded agents, which always ask.
-    private func authorize(client: SSHClient, connection: UUID, action: String, remember: Bool) async -> ExternalApplication? {
-        if let application = await applications.application(for: client) {
-            let request = Self.request(application, connection: connection, action: action, remember: remember)
-            return await approvals.approve(request) ? application : nil
+    /// The application the client is recognized as, if it may sign with `key`.
+    private func authorize(_ key: SSHKeyEntry, client: SSHClient, session: SSHSession, connection: UUID) async -> ExternalApplication? {
+        let action = Self.action(keyName: key.name, client: client, session: session)
+        // Remembered per key and server; a forwarded agent never is.
+        let scope = "\(key.id)@\(session.destination?.hostKeyFingerprint ?? "local")"
+        let remember = !session.isForwarded
+
+        guard let application = await applications.application(for: client) else {
+            // An app's first use always asks, whatever the verification setting.
+            let first = ApprovalRequest(applicationId: "", applicationName: client.appName, connectionId: connection, client: nil, action: action)
+            guard await prompt(first), let application = await applications.addApplication(for: client) else { return nil }
+            await approvals.record(Self.request(application, connection: connection, action: action, scope: scope, remember: remember))
+            return application
         }
-        // An app's first use always asks, whatever the verification setting.
-        let first = ApprovalRequest(applicationId: "", applicationName: client.appName, connectionId: connection, client: nil, action: action)
-        guard await prompt(first), let application = await applications.addApplication(for: client) else { return nil }
-        await approvals.record(Self.request(application, connection: connection, action: action, remember: remember))
-        return application
+        let request = Self.request(application, connection: connection, action: action, scope: scope, remember: remember)
+        if remember, unlockedFor.contains(connection) {
+            await approvals.record(request)
+            return application
+        }
+        if remember, application.allowed?.itemIds.contains(key.id) == true {
+            return application
+        }
+        return await approvals.approve(request) ? application : nil
     }
 
-    private static func request(_ application: ExternalApplication, connection: UUID, action: String, remember: Bool = true) -> ApprovalRequest {
-        ApprovalRequest(applicationId: application.id, applicationName: application.name, connectionId: connection, client: nil, action: action, remember: remember)
+    private static func request(_ application: ExternalApplication, connection: UUID, action: String, scope: String, remember: Bool) -> ApprovalRequest {
+        ApprovalRequest(
+            applicationId: application.id,
+            applicationName: application.name,
+            connectionId: connection,
+            client: nil,
+            action: action,
+            scope: scope,
+            remember: remember
+        )
     }
 
     /// E.g. `use your SSH key “GitHub” to sign in to github.com (git → ssh)`.

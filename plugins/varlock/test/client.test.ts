@@ -80,6 +80,22 @@ describe('connection failures', () => {
     await harness.stop();
   });
 
+  test('reads selected folders and items without asking, and asks for anything else', async () => {
+    const harness = await startHarness({
+      DESKWARDEN_HARNESS_DENY: '1',
+      DESKWARDEN_HARNESS_ALLOWED: 'folder:Infra,item:7a1b2c3d-0000-4000-8000-000000000003',
+    });
+    const client = new DeskwardenClient({ key: harness.key, socketPath: harness.socketPath });
+    assert.equal(await client.get('Infra/Stripe'), 'sk_test_infra');
+    assert.equal(await client.get('Infra/Databases/Replica'), 'pg-replica');
+    assert.equal(await client.get('Deploy notes', 'notes'), 'line one\nline two');
+    await assert.rejects(client.get('Personal/Stripe'), { code: 'denied' });
+    // Selected items are still served after a denial on the same connection.
+    assert.equal(await client.get('Infra/Postgres prod'), 'pg-secret');
+    client.close();
+    await harness.stop();
+  });
+
   test('reports a locked vault', async () => {
     const harness = await startHarness({ DESKWARDEN_HARNESS_LOCKED: '1' });
     const client = new DeskwardenClient({ key: harness.key, socketPath: harness.socketPath });

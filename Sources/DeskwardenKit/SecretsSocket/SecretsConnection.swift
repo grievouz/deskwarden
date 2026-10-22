@@ -17,6 +17,7 @@ final class SecretsConnection: @unchecked Sendable {
     private let connection: NWConnection
     private let queue: DispatchQueue
     private let applications: [String: ExternalApplication]
+    private let currentApplication: @Sendable (String) -> ExternalApplication?
     private let secrets: SecretProvider
     private let approvals: ApprovalProvider
     private let nonce = randomBytes(32)
@@ -44,12 +45,14 @@ final class SecretsConnection: @unchecked Sendable {
         connection: NWConnection,
         queue: DispatchQueue,
         applications: [String: ExternalApplication],
+        currentApplication: @escaping @Sendable (String) -> ExternalApplication?,
         secrets: SecretProvider,
         approvals: ApprovalProvider
     ) {
         self.connection = connection
         self.queue = queue
         self.applications = applications
+        self.currentApplication = currentApplication
         self.secrets = secrets
         self.approvals = approvals
     }
@@ -157,31 +160,53 @@ final class SecretsConnection: @unchecked Sendable {
         send(.ready)
     }
 
-    private func serve(_ get: ClientMessage.Get, application: ExternalApplication, client: ClientInfo?) async {
-        let request = ApprovalRequest(
-            applicationId: application.id,
-            applicationName: application.name,
-            connectionId: id,
-            client: client,
-            action: "read \(get.path)"
-        )
+    private func serve(_ get: ClientMessage.Get, application authenticated: ExternalApplication, client: ClientInfo?) async {
+        // As it is now, in case what it may access changed since it connected.
+        let application = currentApplication(authenticated.id) ?? authenticated
+        func request(scope: String?) -> ApprovalRequest {
+            ApprovalRequest(
+                applicationId: application.id,
+                applicationName: application.name,
+                connectionId: id,
+                client: client,
+                action: "read \(get.path)",
+                scope: scope
+            )
+        }
         // Unlocking asks for Touch ID, which then also verifies this request.
         var verified = false
         if await secrets.isLocked {
-            guard !unlockDeclined, await secrets.unlock(for: request) else {
+            guard !unlockDeclined, await secrets.unlock(for: request(scope: nil)) else {
                 unlockDeclined = true
                 send(Self.errorMessage(for: .locked, requestId: get.id))
                 return
             }
-            await approvals.record(request)
             verified = true
         }
-        if !denied, !verified {
-            denied = await !approvals.approve(request)
-        }
-        guard !denied else {
-            send(.error(id: get.id, code: .denied, message: "Access was denied in Deskwarden"))
+        // Access is decided per item, so find it first. Nothing is decrypted yet.
+        let entry: VaultEntry
+        do {
+            entry = try await secrets.entry(at: get.path)
+        } catch {
+            send(Self.errorMessage(for: error, requestId: get.id))
             return
+        }
+        let itemRequest = request(scope: entry.id)
+        var allowed = verified
+        if verified {
+            await approvals.record(itemRequest)
+        } else if let selection = application.allowed {
+            // Selected for this application: no prompt.
+            allowed = selection.allows(entry, folderNames: await secrets.folderNames())
+        }
+        if !allowed {
+            if !denied {
+                denied = !(await approvals.approve(itemRequest))
+            }
+            if denied {
+                send(.error(id: get.id, code: .denied, message: "Access was denied in Deskwarden"))
+                return
+            }
         }
         do {
             let value = try await secrets.value(at: get.path, field: get.field ?? "password")

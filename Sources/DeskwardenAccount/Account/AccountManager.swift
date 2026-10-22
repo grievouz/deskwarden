@@ -369,6 +369,11 @@ public final class AccountManager {
     // MARK: - Syncing
 
     /// Syncs if the server says the vault changed since the last sync.
+    /// Folders, items and SSH keys to choose from, while unlocked.
+    public func catalog() async -> VaultCatalog? {
+        await secretProvider.session?.catalog
+    }
+
     public func syncIfChanged() async {
         guard case .unlocked = status, let account, !isSyncing else { return }
         let api = BitwardenAPI(server: account.server, deviceIdentifier: deviceIdentifier)
@@ -470,6 +475,15 @@ public final class VaultSecretProvider: SecretProvider, SSHKeyProvider {
     public func unlock(reason: String) async -> Bool {
         guard let handler = unlockHandler.withLock({ $0 }) else { return false }
         return await handler(reason)
+    }
+
+    public func entry(at path: String) async throws(SecretLookupError) -> VaultEntry {
+        guard let session else { throw .locked }
+        return try await session.entry(at: path)
+    }
+
+    public func folderNames() async -> [String: String] {
+        await session?.folderNames ?? [:]
     }
 
     public func sshKeys() async -> [SSHKeyEntry] {

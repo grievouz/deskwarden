@@ -7,11 +7,13 @@ public struct VaultEntry: Sendable, Hashable {
     public let id: String
     public let name: String
     public let folder: String?
+    public let folderId: String?
 
-    public init(id: String, name: String, folder: String?) {
+    public init(id: String, name: String, folder: String?, folderId: String? = nil) {
         self.id = id
         self.name = name
         self.folder = folder
+        self.folderId = folderId
     }
 }
 
@@ -20,6 +22,7 @@ public struct VaultItem: Sendable, Hashable {
     public let id: String
     public let name: String
     public let folder: String?
+    public let folderId: String?
     public let username: String?
     public let password: String?
     public let notes: String?
@@ -29,6 +32,7 @@ public struct VaultItem: Sendable, Hashable {
         id: String,
         name: String,
         folder: String? = nil,
+        folderId: String? = nil,
         username: String? = nil,
         password: String? = nil,
         notes: String? = nil,
@@ -37,6 +41,7 @@ public struct VaultItem: Sendable, Hashable {
         self.id = id
         self.name = name
         self.folder = folder
+        self.folderId = folderId
         self.username = username
         self.password = password
         self.notes = notes
@@ -44,7 +49,8 @@ public struct VaultItem: Sendable, Hashable {
     }
 
     public var entry: VaultEntry {
-        VaultEntry(id: id, name: name, folder: folder)
+        // Fixtures without folder ids use the folder name as one.
+        VaultEntry(id: id, name: name, folder: folder, folderId: folderId ?? folder)
     }
 
     /// `password`, `username` and `notes` read the built-in fields; anything

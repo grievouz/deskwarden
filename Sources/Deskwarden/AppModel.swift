@@ -239,6 +239,14 @@ final class AppModel {
         return application
     }
 
+    /// What the application may use without a prompt; `nil` asks for anything.
+    func setAllowed(_ selection: AccessSelection?, for id: ExternalApplication.ID) {
+        guard let index = applications.firstIndex(where: { $0.id == id }) else { return }
+        applications[index].allowed = selection
+        persistApplications()
+        applySecretsSocket()
+    }
+
     func removeApplication(id: ExternalApplication.ID) {
         applications.removeAll { $0.id == id }
         persistApplications()

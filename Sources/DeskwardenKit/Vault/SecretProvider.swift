@@ -8,6 +8,11 @@ public protocol SecretProvider: Sendable {
     /// Tries to unlock for a request that arrived while locked, e.g. with
     /// Touch ID. Returns whether the vault is unlocked now.
     func unlock(for request: ApprovalRequest) async -> Bool
+    /// Finds the item at a path without decrypting anything, so access can
+    /// be decided per item before its value is read.
+    func entry(at path: String) async throws(SecretLookupError) -> VaultEntry
+    /// Folder ids and names, for selections that include nested folders.
+    func folderNames() async -> [String: String]
     func value(at path: String, field: String) async throws(SecretLookupError) -> String
 }
 
@@ -40,6 +45,15 @@ public final class StaticSecretProvider: SecretProvider {
         guard unlockable else { return !isLocked }
         locked.withLock { $0 = false }
         return true
+    }
+
+    public func entry(at path: String) async throws(SecretLookupError) -> VaultEntry {
+        guard !isLocked else { throw .locked }
+        return try index.entry(at: path)
+    }
+
+    public func folderNames() async -> [String: String] {
+        Dictionary(items.values.compactMap { item in item.entry.folderId.map { ($0, item.folder ?? $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
     public func value(at path: String, field: String) async throws(SecretLookupError) -> String {

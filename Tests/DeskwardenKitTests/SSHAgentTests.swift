@@ -38,6 +38,23 @@ struct SSHAgentTests {
         #expect(await agent.registry.applications.isEmpty)
     }
 
+    @Test func selectedKeysSignWithoutAsking() async throws {
+        let keys = try [try TestKeys.generate(["-t", "ed25519"], comment: "key 0"), try TestKeys.generate(["-t", "ed25519"], comment: "key 1")]
+        let agent = try await TestAgent.start(keys: keys, policy: .everyRequest)
+        defer { agent.stop() }
+
+        // First use asks and adds the client.
+        try agent.signAndVerify(with: keys[0])
+        #expect(agent.prompts.count == 1)
+        await agent.registry.setAllowed(AccessSelection(itemIds: ["0"]))
+
+        try agent.signAndVerify(with: keys[0])
+        #expect(agent.prompts.count == 1)
+        // A key that isn't selected still asks.
+        try agent.signAndVerify(with: keys[1])
+        #expect(agent.prompts.count == 2)
+    }
+
     @Test func unlocksALockedVaultToList() async throws {
         let key = try TestKeys.generate(["-t", "ed25519"], comment: "key")
         let agent = try await TestAgent.start(keys: [key], locked: true)
@@ -209,6 +226,12 @@ private actor FakeRegistry: SSHApplicationRegistry {
     }
 
     func markUsed(_ application: ExternalApplication) {}
+
+    func setAllowed(_ selection: AccessSelection?) {
+        for index in applications.indices {
+            applications[index].allowed = selection
+        }
+    }
 }
 
 private final class PromptCounter: Sendable {

@@ -23,8 +23,8 @@ struct ApprovalTests {
         }
     }
 
-    func request(app: String = "app", connection: UUID = UUID()) -> ApprovalRequest {
-        ApprovalRequest(applicationId: app, applicationName: app, connectionId: connection, client: nil, action: "read Item")
+    func request(app: String = "app", connection: UUID = UUID(), scope: String? = nil, remember: Bool = true) -> ApprovalRequest {
+        ApprovalRequest(applicationId: app, applicationName: app, connectionId: connection, client: nil, action: "read Item", scope: scope, remember: remember)
     }
 
     @Test func everyRequestPromptsEachTime() async {
@@ -125,6 +125,38 @@ struct ApprovalTests {
         await approver.record(request(connection: connection))
         _ = await approver.approve(request(connection: connection))
         #expect(fake.count == 1)
+    }
+
+    @Test func approvalsAreRememberedPerScope() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .firstRequest, prompt: fake.prompt)
+        _ = await approver.approve(request(scope: "item-1"))
+        _ = await approver.approve(request(scope: "item-1"))
+        #expect(fake.count == 1)
+        _ = await approver.approve(request(scope: "item-2"))
+        #expect(fake.count == 2)
+        // Another application asking for the same item asks too.
+        _ = await approver.approve(request(app: "other", scope: "item-1"))
+        #expect(fake.count == 3)
+    }
+
+    @Test func unrememberedRequestsAlwaysAsk() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .interval(.seconds(300)), prompt: fake.prompt)
+        await approver.record(request(scope: "key@host", remember: false))
+        _ = await approver.approve(request(scope: "key@host", remember: false))
+        _ = await approver.approve(request(scope: "key@host", remember: false))
+        #expect(fake.count == 2)
+        // Nor do they count for remembered requests.
+        _ = await approver.approve(request(scope: "key@host"))
+        #expect(fake.count == 3)
+    }
+
+    @Test func neverDoesNotAskForUnrememberedRequests() async {
+        let fake = FakePrompt()
+        let approver = TouchIDApprover(policy: .never, prompt: fake.prompt)
+        #expect(await approver.approve(request(remember: false)))
+        #expect(fake.count == 0)
     }
 
     @Test func reasonNamesApplicationAndProject() {

@@ -10,17 +10,33 @@ public struct ApprovalRequest: Sendable {
     /// What the requester wants to do, completing "let varlock …": e.g.
     /// `read Infra/Stripe` or `use your SSH key “GitHub” (git → ssh)`.
     public let action: String
+    /// What a remembered approval covers within the application: an item for
+    /// secrets, a key and server for SSH. `nil` covers the whole application.
+    public let scope: String?
     /// False for requests that must not use or count toward a remembered
     /// approval, such as signatures for a forwarded agent.
     public let remember: Bool
 
-    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, action: String, remember: Bool = true) {
+    public init(
+        applicationId: String,
+        applicationName: String,
+        connectionId: UUID,
+        client: ClientInfo?,
+        action: String,
+        scope: String? = nil,
+        remember: Bool = true
+    ) {
         self.applicationId = applicationId
         self.applicationName = applicationName
         self.connectionId = connectionId
         self.client = client
         self.action = action
+        self.scope = scope
         self.remember = remember
+    }
+
+    var rememberKey: String {
+        "\(applicationId)|\(scope ?? "*")"
     }
 
     /// Who's asking, for prompts: the application as the user registered it,
@@ -75,7 +91,8 @@ public actor TouchIDApprover: ApprovalProvider {
 
     public private(set) var policy: VerificationPolicy
     private let prompt: Prompt
-    private var approvedApplications: Set<String> = []
+    /// Remembered approvals, by application and scope.
+    private var approvedScopes: Set<String> = []
     private var approvedAt: [String: ContinuousClock.Instant] = [:]
     private var pending: [String: Task<Bool, Never>] = [:]
 
@@ -92,7 +109,7 @@ public actor TouchIDApprover: ApprovalProvider {
     /// Makes the next request from every application ask again. The app calls
     /// this when the vault locks.
     public func forgetApprovals() {
-        approvedApplications.removeAll()
+        approvedScopes.removeAll()
         approvedAt.removeAll()
     }
 
@@ -101,8 +118,8 @@ public actor TouchIDApprover: ApprovalProvider {
     public func record(_ request: ApprovalRequest) async {
         guard request.remember else { return }
         switch policy {
-        case .firstRequest: approvedApplications.insert(request.applicationId)
-        case .interval: approvedAt[request.applicationId] = .now
+        case .firstRequest: approvedScopes.insert(request.rememberKey)
+        case .interval: approvedAt[request.rememberKey] = .now
         case .everyRequest, .never: break
         }
     }
@@ -117,14 +134,14 @@ public actor TouchIDApprover: ApprovalProvider {
         case .everyRequest:
             return await prompt(request)
         case .firstRequest:
-            if approvedApplications.contains(request.applicationId) { return true }
-            let approved = await sharedPrompt(for: request, key: request.applicationId)
-            if approved { approvedApplications.insert(request.applicationId) }
+            if approvedScopes.contains(request.rememberKey) { return true }
+            let approved = await sharedPrompt(for: request, key: request.rememberKey)
+            if approved { approvedScopes.insert(request.rememberKey) }
             return approved
         case .interval(let interval):
-            if let at = approvedAt[request.applicationId], at.duration(to: .now) < interval { return true }
-            let approved = await sharedPrompt(for: request, key: request.applicationId)
-            if approved { approvedAt[request.applicationId] = .now }
+            if let at = approvedAt[request.rememberKey], at.duration(to: .now) < interval { return true }
+            let approved = await sharedPrompt(for: request, key: request.rememberKey)
+            if approved { approvedAt[request.rememberKey] = .now }
             return approved
         }
     }

@@ -31,6 +31,9 @@ actor VaultSession {
 
     private let client: Client
     private var index = VaultIndex(entries: [])
+    private var entries: [VaultEntry] = []
+    /// Folder names by id.
+    private(set) var folderNames: [String: String] = [:]
     private var ciphers: [String: BitwardenSdk.Cipher] = [:]
     /// SSH key items with their public keys, which aren't secret, decrypted.
     private(set) var sshKeys: [SSHKeyEntry] = []
@@ -137,10 +140,12 @@ actor VaultSession {
             Self.logger.error("\(result.failures.count) vault items couldn't be decrypted")
         }
 
-        index = VaultIndex(entries: result.successes.compactMap { item in
+        entries = result.successes.compactMap { item in
             guard let id = item.id, item.deletedDate == nil else { return nil }
-            return VaultEntry(id: id, name: item.name, folder: item.folderId.flatMap { folderNames[$0] })
-        })
+            return VaultEntry(id: id, name: item.name, folder: item.folderId.flatMap { folderNames[$0] }, folderId: item.folderId)
+        }
+        index = VaultIndex(entries: entries)
+        self.folderNames = folderNames
         ciphers = Dictionary(encrypted.compactMap { cipher in cipher.id.map { ($0, cipher) } }, uniquingKeysWith: { first, _ in first })
 
         var sshKeys: [SSHKeyEntry] = []
@@ -170,6 +175,20 @@ actor VaultSession {
 
     var itemCount: Int {
         ciphers.count
+    }
+
+    func entry(at path: String) throws(SecretLookupError) -> VaultEntry {
+        try index.entry(at: path)
+    }
+
+    /// What there is to choose from when selecting what an application may use.
+    var catalog: VaultCatalog {
+        let sshKeyIds = Set(sshKeys.map(\.id))
+        return VaultCatalog(
+            folders: folderNames.map { VaultCatalog.Folder(id: $0.key, name: $0.value) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            items: entries.filter { !sshKeyIds.contains($0.id) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            sshKeys: sshKeys.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        )
     }
 
     func value(at path: String, field: String) async throws(SecretLookupError) -> String {

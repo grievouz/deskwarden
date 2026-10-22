@@ -36,11 +36,16 @@ private struct MenuBarIcon: View {
     }()
 
     var body: some View {
-        if let image = Self.image {
-            Image(nsImage: image)
-        } else {
-            Image(systemName: "lock.shield")
+        Group {
+            if let image = Self.image {
+                Image(nsImage: image)
+            } else {
+                Image(systemName: "lock.shield")
+            }
         }
+        // Menu bar managers such as Bartender list the item by this name;
+        // without it they'd show the image's name.
+        .accessibilityLabel("Deskwarden")
     }
 }
 

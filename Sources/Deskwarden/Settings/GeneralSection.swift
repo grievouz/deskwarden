@@ -7,9 +7,9 @@ struct GeneralSection: View {
         Section("General") {
             Toggle(isOn: $model.sshAgentEnabled) {
                 Text("SSH agent")
-                Text("Serves the SSH keys in your vault to ssh and git. Turning it on adds IdentityAgent to ~/.ssh/config, and turning it off removes it.")
+                Text("Serves the SSH keys in your vault to ssh, git and anything else using SSH_AUTH_SOCK. Turning it on sets that up, with IdentityAgent in ~/.ssh/config; turning it off undoes it.")
             }
-            if let error = model.sshConfigError {
+            if let error = model.sshSetupError {
                 Text(error).foregroundStyle(.red)
             }
 

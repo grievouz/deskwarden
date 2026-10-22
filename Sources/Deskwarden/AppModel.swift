@@ -58,10 +58,10 @@ final class AppModel {
     private(set) var keychainError: String?
     private(set) var launchAtLoginError: String?
 
-    private(set) var sshConfigError: String?
+    private(set) var sshSetupError: String?
 
-    /// Turning the agent on or off also adds or removes its IdentityAgent
-    /// block in ~/.ssh/config.
+    /// Turning the agent on or off also points ssh at it, or stops: the
+    /// IdentityAgent block in ~/.ssh/config, and launchd's SSH_AUTH_SOCK.
     var sshAgentEnabled: Bool {
         didSet {
             defaults.set(sshAgentEnabled, forKey: DefaultsKey.sshAgentEnabled)
@@ -287,19 +287,34 @@ final class AppModel {
         }
     }
 
+    /// Runs at launch too: launchd's socket path is new every login.
     private func updateSSHConfig() {
+        let socketPath = SSHAgentServer.defaultSocketPath
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let socketPath = SSHAgentServer.defaultSocketPath.replacingOccurrences(of: home, with: "~")
+        var errors: [String] = []
         do {
             if sshAgentEnabled {
-                try SSHConfigFile().install(socketPath: socketPath)
+                try SSHConfigFile().install(socketPath: socketPath.replacingOccurrences(of: home, with: "~"))
             } else {
                 try SSHConfigFile().uninstall()
             }
-            sshConfigError = nil
         } catch {
-            sshConfigError = "Couldn't update ~/.ssh/config: \(error.localizedDescription)"
-            Self.logger.error("Couldn't update ~/.ssh/config: \(error, privacy: .public)")
+            errors.append("Couldn't update ~/.ssh/config: \(error.localizedDescription)")
+        }
+        do {
+            if let link = LaunchdAgentLink.current() {
+                if sshAgentEnabled {
+                    try link.link(to: socketPath)
+                } else {
+                    try link.unlink(from: socketPath)
+                }
+            }
+        } catch {
+            errors.append("Couldn't point SSH_AUTH_SOCK at the agent: \(error.localizedDescription)")
+        }
+        sshSetupError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        for error in errors {
+            Self.logger.error("\(error, privacy: .public)")
         }
     }
 }

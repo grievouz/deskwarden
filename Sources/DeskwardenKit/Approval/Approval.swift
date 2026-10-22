@@ -10,13 +10,17 @@ public struct ApprovalRequest: Sendable {
     /// What the requester wants to do, completing "let varlock …": e.g.
     /// `read Infra/Stripe` or `use your SSH key “GitHub” (git → ssh)`.
     public let action: String
+    /// False for requests that must not use or count toward a remembered
+    /// approval, such as signatures for a forwarded agent.
+    public let remember: Bool
 
-    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, action: String) {
+    public init(applicationId: String, applicationName: String, connectionId: UUID, client: ClientInfo?, action: String, remember: Bool = true) {
         self.applicationId = applicationId
         self.applicationName = applicationName
         self.connectionId = connectionId
         self.client = client
         self.action = action
+        self.remember = remember
     }
 
     /// Who's asking, for prompts: the application as the user registered it,
@@ -95,6 +99,7 @@ public actor TouchIDApprover: ApprovalProvider {
     // `async` like the protocol's default, so calls on the actor itself don't
     // resolve to that no-op default instead.
     public func record(_ request: ApprovalRequest) async {
+        guard request.remember else { return }
         switch policy {
         case .firstRequest: approvedApplications.insert(request.applicationId)
         case .interval: approvedAt[request.applicationId] = .now
@@ -103,6 +108,9 @@ public actor TouchIDApprover: ApprovalProvider {
     }
 
     public func approve(_ request: ApprovalRequest) async -> Bool {
+        if !request.remember {
+            return policy == .never ? true : await prompt(request)
+        }
         switch policy {
         case .never:
             return true

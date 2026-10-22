@@ -127,7 +127,9 @@ The agent serves the vault's SSH key items: Ed25519, ECDSA (P-256, P-384, P-521)
 
 Anything running inside an approved app counts as that app, as with every SSH agent; the Touch ID prompts are what stop it from signing silently. The agent never hands out private keys: each one is decrypted only to make the signature at hand.
 
-Adding keys to the agent, agent locking and extensions such as `session-bind@openssh.com` aren't supported; clients carry on without them.
+**Which server, and forwarding.** OpenSSH 8.9 and later tells the agent which server each connection is for (`session-bind@openssh.com`), with the server's host key signing the session, which the agent checks. Prompts name the server from `known_hosts` ("…to sign in to github.com"). Requests through an agent forwarded with `ssh -A` always ask ("…for a forwarded connection from build-box"), unless **Verify requests** is **Never**, and never use or count toward a remembered approval, so a server you forward to can't sign on the strength of an approval you gave locally.
+
+Adding keys to the agent, agent locking and other extensions aren't supported; clients carry on without them.
 
 ## Using it with varlock
 

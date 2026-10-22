@@ -15,9 +15,9 @@ public struct SSHIdentity: Sendable, Hashable {
 
 /// Decides what each SSH client sees and may sign.
 public protocol SSHAgentHandler: Sendable {
-    func identities(client: SSHClient, connection: UUID) async -> [SSHIdentity]
+    func identities(client: SSHClient, session: SSHSession, connection: UUID) async -> [SSHIdentity]
     /// The signature in SSH wire format, or nil to refuse.
-    func sign(keyBlob: Data, data: Data, flags: UInt32, client: SSHClient, connection: UUID) async -> Data?
+    func sign(keyBlob: Data, data: Data, flags: UInt32, client: SSHClient, session: SSHSession, connection: UUID) async -> Data?
     func connectionClosed(_ connection: UUID) async
 }
 
@@ -37,6 +37,7 @@ public final class SSHAgentServer: @unchecked Sendable {
 
     public let socketPath: String
     private let handler: SSHAgentHandler
+    private let knownHosts: URL
     private let queue = DispatchQueue(label: "io.github.grievouz.deskwarden.ssh-agent")
 
     // Only touched on `queue`.
@@ -45,9 +46,11 @@ public final class SSHAgentServer: @unchecked Sendable {
 
     public var onStatusChange: (@Sendable (Status) -> Void)?
 
-    public init(socketPath: String, handler: SSHAgentHandler) {
+    /// `knownHosts` names servers in prompts; ~/.ssh/known_hosts by default.
+    public init(socketPath: String, handler: SSHAgentHandler, knownHosts: URL? = nil) {
         self.socketPath = socketPath
         self.handler = handler
+        self.knownHosts = knownHosts ?? KnownHosts.defaultFile
     }
 
     public static var defaultSocketPath: String {
@@ -136,7 +139,7 @@ public final class SSHAgentServer: @unchecked Sendable {
             return
         }
         let id = UUID()
-        let connection = SSHAgentConnection(id: id, fd: fd, client: client, handler: handler, queue: queue)
+        let connection = SSHAgentConnection(id: id, fd: fd, client: client, handler: handler, knownHosts: knownHosts, queue: queue)
         connection.onClose = { [weak self] in
             guard let self else { return }
             self.queue.async { self.connections[id] = nil }
@@ -150,17 +153,23 @@ public final class SSHAgentServer: @unchecked Sendable {
 final class SSHAgentConnection: @unchecked Sendable {
     private enum MessageType {
         static let failure: UInt8 = 5
+        static let success: UInt8 = 6
         static let requestIdentities: UInt8 = 11
         static let identitiesAnswer: UInt8 = 12
         static let signRequest: UInt8 = 13
         static let signResponse: UInt8 = 14
+        static let extensionRequest: UInt8 = 27
     }
 
     private let id: UUID
     private let fd: Int32
     private let client: SSHClient
     private let handler: SSHAgentHandler
+    private let knownHosts: URL
     private let queue: DispatchQueue
+
+    // Only touched by the frame-handling task.
+    private var session = SSHSession()
 
     // Only touched on `queue`.
     private var source: DispatchSourceRead?
@@ -169,11 +178,12 @@ final class SSHAgentConnection: @unchecked Sendable {
 
     var onClose: (@Sendable () -> Void)?
 
-    init(id: UUID, fd: Int32, client: SSHClient, handler: SSHAgentHandler, queue: DispatchQueue) {
+    init(id: UUID, fd: Int32, client: SSHClient, handler: SSHAgentHandler, knownHosts: URL, queue: DispatchQueue) {
         self.id = id
         self.fd = fd
         self.client = client
         self.handler = handler
+        self.knownHosts = knownHosts
         self.queue = queue
     }
 
@@ -236,7 +246,7 @@ final class SSHAgentConnection: @unchecked Sendable {
         do {
             switch try reader.readByte() {
             case MessageType.requestIdentities:
-                let identities = await handler.identities(client: client, connection: id)
+                let identities = await handler.identities(client: client, session: session, connection: id)
                 response.write(MessageType.identitiesAnswer)
                 response.write(UInt32(identities.count))
                 for identity in identities {
@@ -247,14 +257,16 @@ final class SSHAgentConnection: @unchecked Sendable {
                 let keyBlob = try reader.readString()
                 let data = try reader.readString()
                 let flags = reader.isAtEnd ? 0 : try reader.readUInt32()
-                guard let signature = await handler.sign(keyBlob: keyBlob, data: data, flags: flags, client: client, connection: id) else {
+                guard let signature = await handler.sign(keyBlob: keyBlob, data: data, flags: flags, client: client, session: session, connection: id) else {
                     return Data([MessageType.failure])
                 }
                 response.write(MessageType.signResponse)
                 response.writeString(signature)
+            case MessageType.extensionRequest where try reader.readText() == "session-bind@openssh.com":
+                return Data([session.bind(&reader, knownHosts: knownHosts) ? MessageType.success : MessageType.failure])
             default:
-                // Adding or removing keys, locking the agent and extensions
-                // such as session-bind aren't supported; clients carry on.
+                // Adding or removing keys, locking the agent and other
+                // extensions aren't supported; clients carry on.
                 return Data([MessageType.failure])
             }
         } catch {

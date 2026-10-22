@@ -51,6 +51,32 @@ struct SSHAgentTests {
         #expect(agent.prompts.count == 0)
     }
 
+    /// `ssh -A` to a real sshd on localhost: logging in signs locally, then the
+    /// server signs through the forwarded agent, which must ask even though the
+    /// app was just approved.
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/sbin/sshd")))
+    func forwardedAgentRequestsAlwaysAsk() async throws {
+        let key = try TestKeys.generate(["-t", "ed25519"], comment: "key")
+        let server = try TestSSHServer.start(authorizing: key)
+        defer { server.stop() }
+        let agent = try await TestAgent.start(keys: [key], policy: .firstRequest, knownHosts: server.knownHosts)
+        defer { agent.stop() }
+
+        let message = key.directory.appendingPathComponent("message")
+        try Data("signed on the server".utf8).write(to: message)
+        try server.run("ssh-keygen -Y sign -f \(key.directory.path)/key.pub -n test \(message.path)", agent: agent, forwardAgent: true)
+        #expect(FileManager.default.fileExists(atPath: message.path + ".sig"))
+
+        let actions = agent.prompts.actions
+        #expect(actions.count == 2)
+        #expect(actions.first?.contains("to sign in to 127.0.0.1") == true)
+        #expect(actions.last?.contains("for a forwarded connection from 127.0.0.1") == true)
+
+        // Logging in again doesn't ask: local approvals are still remembered.
+        try server.run("true", agent: agent, forwardAgent: false)
+        #expect(agent.prompts.count == 2)
+    }
+
     @Test func identifiesTheConnectingProcess() async throws {
         let key = try TestKeys.generate(["-t", "ed25519"], comment: "key")
         // Locked, so listing goes through the registry, which sees the client.
@@ -84,14 +110,23 @@ private final class TestAgent: Sendable {
         self.prompts = prompts
     }
 
-    static func start(keys generated: [TestKeys.Generated], locked: Bool = false, promptAnswer: Bool = true) async throws -> TestAgent {
+    /// `policy` puts a real verification policy in front of the prompt;
+    /// without one, every approval past an app's first use is granted.
+    static func start(
+        keys generated: [TestKeys.Generated],
+        locked: Bool = false,
+        promptAnswer: Bool = true,
+        policy: VerificationPolicy? = nil,
+        knownHosts: URL? = nil
+    ) async throws -> TestAgent {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dw-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let keys = FakeKeys(keys: generated, locked: locked)
         let registry = FakeRegistry()
         let prompts = PromptCounter(answer: promptAnswer)
-        let access = SSHAccess(keys: keys, applications: registry, approvals: FixedApprover(approved: true), prompt: prompts.prompt)
-        let server = SSHAgentServer(socketPath: directory.appendingPathComponent("agent.sock").path, handler: access)
+        let approvals: ApprovalProvider = policy.map { TouchIDApprover(policy: $0, prompt: prompts.prompt) } ?? FixedApprover(approved: true)
+        let access = SSHAccess(keys: keys, applications: registry, approvals: approvals, prompt: prompts.prompt)
+        let server = SSHAgentServer(socketPath: directory.appendingPathComponent("agent.sock").path, handler: access, knownHosts: knownHosts)
         await withCheckedContinuation { continuation in
             let resumed = Mutex(false)
             server.onStatusChange = { status in
@@ -178,18 +213,82 @@ private actor FakeRegistry: SSHApplicationRegistry {
 
 private final class PromptCounter: Sendable {
     let answer: Bool
-    private let prompts = Mutex(0)
+    private let prompts = Mutex<[String]>([])
 
     init(answer: Bool) {
         self.answer = answer
     }
 
-    var count: Int { prompts.withLock { $0 } }
+    var count: Int { prompts.withLock { $0.count } }
+    /// What each prompt asked to allow.
+    var actions: [String] { prompts.withLock { $0 } }
 
     var prompt: TouchIDApprover.Prompt {
-        { [self] _ in
-            prompts.withLock { $0 += 1 }
+        { [self] request in
+            prompts.withLock { $0.append(request.action) }
             return answer
         }
+    }
+}
+
+/// An unprivileged sshd on localhost that lets the test user in with one key.
+private struct TestSSHServer {
+    let directory: URL
+    let port: Int
+    let process: Process
+
+    var knownHosts: URL { directory.appendingPathComponent("known_hosts") }
+
+    static func start(authorizing key: TestKeys.Generated) throws -> TestSSHServer {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dw-sshd-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try TestKeys.run("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", directory.appendingPathComponent("host_key").path])
+        try Data((key.publicKeyLine + "\n").utf8).write(to: directory.appendingPathComponent("authorized_keys"))
+        let port = Int.random(in: 30000...39999)
+        let config = """
+        Port \(port)
+        ListenAddress 127.0.0.1
+        HostKey \(directory.path)/host_key
+        AuthorizedKeysFile \(directory.path)/authorized_keys
+        PidFile \(directory.path)/sshd.pid
+        UsePAM no
+        StrictModes no
+        PasswordAuthentication no
+        KbdInteractiveAuthentication no
+        AllowAgentForwarding yes
+        """
+        try Data(config.utf8).write(to: directory.appendingPathComponent("sshd_config"))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/sshd")
+        process.arguments = ["-D", "-f", directory.appendingPathComponent("sshd_config").path, "-E", directory.appendingPathComponent("sshd.log").path]
+        try process.run()
+        // Wait for it to listen.
+        for _ in 0..<50 where !FileManager.default.fileExists(atPath: directory.appendingPathComponent("sshd.pid").path) {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return TestSSHServer(directory: directory, port: port, process: process)
+    }
+
+    @discardableResult
+    func run(_ command: String, agent: TestAgent, forwardAgent: Bool) throws -> String {
+        try TestKeys.run("/usr/bin/ssh", [
+            "-F", "/dev/null",
+            "-o", "IdentityAgent=\(agent.server.socketPath)",
+            "-o", "ForwardAgent=\(forwardAgent ? "yes" : "no")",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UserKnownHostsFile=\(knownHosts.path)",
+            "-o", "BatchMode=yes",
+            "-p", String(port), "127.0.0.1", command,
+        ], environment: agent.environment)
+    }
+
+    /// `waitUntilExit` needs the run loop of the thread that launched sshd,
+    /// which an async test doesn't keep, so this waits on the pid instead.
+    func stop() {
+        let pid = process.processIdentifier
+        kill(pid, SIGTERM)
+        var status: Int32 = 0
+        _ = waitpid(pid, &status, 0)
+        try? FileManager.default.removeItem(at: directory)
     }
 }

@@ -60,17 +60,18 @@ public actor SSHAccess: SSHAgentHandler {
         self.prompt = prompt
     }
 
-    public func identities(client: SSHClient, connection: UUID) async -> [SSHIdentity] {
-        guard await ensureUnlocked(client: client, connection: connection) else { return [] }
+    public func identities(client: SSHClient, session: SSHSession, connection: UUID) async -> [SSHIdentity] {
+        guard await ensureUnlocked(client: client, session: session, connection: connection) else { return [] }
         return await keys.sshKeys().map { SSHIdentity(keyBlob: $0.publicKeyBlob, comment: $0.name) }
     }
 
-    public func sign(keyBlob: Data, data: Data, flags: UInt32, client: SSHClient, connection: UUID) async -> Data? {
-        guard !refused.contains(connection), await ensureUnlocked(client: client, connection: connection),
+    public func sign(keyBlob: Data, data: Data, flags: UInt32, client: SSHClient, session: SSHSession, connection: UUID) async -> Data? {
+        guard !refused.contains(connection), await ensureUnlocked(client: client, session: session, connection: connection),
               let key = await keys.sshKeys().first(where: { $0.publicKeyBlob == keyBlob })
         else { return nil }
 
-        guard let application = await authorize(client: client, connection: connection, action: Self.action(keyName: key.name, client: client)) else {
+        let action = Self.action(keyName: key.name, client: client, session: session)
+        guard let application = await authorize(client: client, connection: connection, action: action, remember: !session.isForwarded) else {
             refused.insert(connection)
             return nil
         }
@@ -90,9 +91,17 @@ public actor SSHAccess: SSHAgentHandler {
         await approvals.connectionClosed(connection)
     }
 
-    private func ensureUnlocked(client: SSHClient, connection: UUID) async -> Bool {
+    private func ensureUnlocked(client: SSHClient, session: SSHSession, connection: UUID) async -> Bool {
         guard await keys.isLocked else { return true }
         guard !refused.contains(connection) else { return false }
+        // A forwarded agent only unlocks; it doesn't let the app in.
+        if let origin = session.forwardedFrom {
+            guard await keys.unlock(reason: "unlock your vault for a forwarded connection from \(origin.displayName)") else {
+                refused.insert(connection)
+                return false
+            }
+            return true
+        }
         let existing = await applications.application(for: client)
         let reason = existing == nil
             ? "unlock your vault and let \(client.appName) use your SSH keys\(Self.suffix(client.via))"
@@ -114,23 +123,35 @@ public actor SSHAccess: SSHAgentHandler {
     }
 
     /// The application the client is recognized as, if it may sign.
-    private func authorize(client: SSHClient, connection: UUID, action: String) async -> ExternalApplication? {
+    /// `remember` is false for forwarded agents, which always ask.
+    private func authorize(client: SSHClient, connection: UUID, action: String, remember: Bool) async -> ExternalApplication? {
         if let application = await applications.application(for: client) {
-            return await approvals.approve(Self.request(application, connection: connection, action: action)) ? application : nil
+            let request = Self.request(application, connection: connection, action: action, remember: remember)
+            return await approvals.approve(request) ? application : nil
         }
         // An app's first use always asks, whatever the verification setting.
         let first = ApprovalRequest(applicationId: "", applicationName: client.appName, connectionId: connection, client: nil, action: action)
         guard await prompt(first), let application = await applications.addApplication(for: client) else { return nil }
-        await approvals.record(Self.request(application, connection: connection, action: action))
+        await approvals.record(Self.request(application, connection: connection, action: action, remember: remember))
         return application
     }
 
-    private static func request(_ application: ExternalApplication, connection: UUID, action: String) -> ApprovalRequest {
-        ApprovalRequest(applicationId: application.id, applicationName: application.name, connectionId: connection, client: nil, action: action)
+    private static func request(_ application: ExternalApplication, connection: UUID, action: String, remember: Bool = true) -> ApprovalRequest {
+        ApprovalRequest(applicationId: application.id, applicationName: application.name, connectionId: connection, client: nil, action: action, remember: remember)
     }
 
-    static func action(keyName: String, client: SSHClient) -> String {
-        "use your SSH key “\(keyName)”\(suffix(client.via))"
+    /// E.g. `use your SSH key “GitHub” to sign in to github.com (git → ssh)`.
+    static func action(keyName: String, client: SSHClient, session: SSHSession) -> String {
+        var action = "use your SSH key “\(keyName)”"
+        if let origin = session.forwardedFrom {
+            action += " for a forwarded connection from \(origin.displayName)"
+            if let destination = session.destination {
+                action += " to \(destination.displayName)"
+            }
+        } else if let destination = session.destination {
+            action += " to sign in to \(destination.displayName)"
+        }
+        return action + suffix(client.via)
     }
 
     private static func suffix(_ via: String) -> String {
